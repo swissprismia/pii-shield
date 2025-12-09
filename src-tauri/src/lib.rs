@@ -4,7 +4,9 @@ mod window;
 
 use clipboard::ClipboardWatcher;
 use parking_lot::Mutex;
+use rdev::{listen, Button, Event, EventType, Key};
 use sidecar::PresidioSidecar;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{
     image::Image,
@@ -25,13 +27,16 @@ fn is_browser_window(app_name: &str) -> bool {
         || app_name_lower.contains("vivaldi")
 }
 
+/// Shared state for keyboard hook (needs to be 'static for rdev callback)
+static CTRL_PRESSED: AtomicBool = AtomicBool::new(false);
+
 /// Application state shared across the Tauri app
 pub struct AppState {
     clipboard_watcher: Mutex<Option<ClipboardWatcher>>,
     sidecar: Arc<tokio::sync::Mutex<PresidioSidecar>>,
     last_clipboard_hash: Mutex<u64>,
     clipboard_handled: Mutex<bool>,
-    pending_anonymization: Mutex<Option<String>>,
+    pending_anonymization: Arc<Mutex<Option<String>>>,
 }
 
 impl AppState {
@@ -41,9 +46,110 @@ impl AppState {
             sidecar: Arc::new(tokio::sync::Mutex::new(PresidioSidecar::new())),
             last_clipboard_hash: Mutex::new(0),
             clipboard_handled: Mutex::new(false),
-            pending_anonymization: Mutex::new(None),
+            pending_anonymization: Arc::new(Mutex::new(None)),
         }
     }
+}
+
+/// Helper function to anonymize clipboard if in browser with pending anonymization
+fn try_anonymize_for_browser(
+    pending_anonymization: &Arc<Mutex<Option<String>>>,
+    app_handle: &AppHandle,
+    trigger: &str,
+) {
+    // Check if we're in a browser
+    if let Some(window_info) = window::get_active_window() {
+        let is_browser = window_info
+            .app_name
+            .as_ref()
+            .map(|name| is_browser_window(name))
+            .unwrap_or(false);
+
+        if is_browser {
+            // Check if we have pending anonymization
+            let mut pending = pending_anonymization.lock();
+            if let Some(anonymized_text) = pending.take() {
+                let app_name = window_info.app_name.as_deref().unwrap_or("browser");
+                log::info!(
+                    "{} in browser detected! Auto-anonymizing for: {}",
+                    trigger,
+                    app_name
+                );
+
+                // Replace clipboard with anonymized text BEFORE paste completes
+                if let Err(e) = clipboard::set_clipboard_text(&anonymized_text) {
+                    log::error!("Failed to auto-anonymize clipboard: {}", e);
+                    // Put it back for retry
+                    *pending = Some(anonymized_text);
+                } else {
+                    log::info!("Clipboard replaced successfully before paste!");
+
+                    // Notify frontend
+                    let _ = app_handle.emit(
+                        "auto-anonymized",
+                        serde_json::json!({
+                            "app_name": app_name,
+                            "trigger": trigger
+                        }),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Start the global input listener to intercept paste actions (Ctrl+V, Ctrl+X, right-click)
+fn start_input_listener(pending_anonymization: Arc<Mutex<Option<String>>>, app_handle: AppHandle) {
+    std::thread::spawn(move || {
+        log::info!("Starting global input listener for paste interception...");
+
+        let callback = move |event: Event| {
+            match event.event_type {
+                // Track Ctrl key state
+                EventType::KeyPress(Key::ControlLeft) | EventType::KeyPress(Key::ControlRight) => {
+                    CTRL_PRESSED.store(true, Ordering::SeqCst);
+                }
+                EventType::KeyRelease(Key::ControlLeft)
+                | EventType::KeyRelease(Key::ControlRight) => {
+                    CTRL_PRESSED.store(false, Ordering::SeqCst);
+                }
+
+                // Ctrl+V - Paste operation
+                EventType::KeyPress(Key::KeyV) => {
+                    if CTRL_PRESSED.load(Ordering::SeqCst) {
+                        log::debug!("Ctrl+V detected!");
+                        try_anonymize_for_browser(&pending_anonymization, &app_handle, "Ctrl+V");
+                    }
+                }
+
+                // Ctrl+X - Cut operation (anonymize in case they paste later)
+                EventType::KeyPress(Key::KeyX) => {
+                    if CTRL_PRESSED.load(Ordering::SeqCst) {
+                        log::debug!("Ctrl+X detected - clipboard will be re-analyzed on change");
+                        // Note: The clipboard polling will detect the new content and analyze it
+                        // We don't need to do anything special here, but we log for debugging
+                    }
+                }
+
+                // Right-click - User might be opening context menu for paste
+                // Pre-emptively replace clipboard when right-clicking in a browser
+                EventType::ButtonPress(Button::Right) => {
+                    log::debug!("Right-click detected!");
+                    try_anonymize_for_browser(
+                        &pending_anonymization,
+                        &app_handle,
+                        "Right-click menu",
+                    );
+                }
+
+                _ => {}
+            }
+        };
+
+        if let Err(error) = listen(callback) {
+            log::error!("Input listener error: {:?}", error);
+        }
+    });
 }
 
 /// Start clipboard monitoring
@@ -54,8 +160,15 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
     // Start the sidecar process
     {
         let mut sidecar = state.sidecar.lock().await;
-        sidecar.start(&app_handle).await.map_err(|e| e.to_string())?;
+        sidecar
+            .start(&app_handle)
+            .await
+            .map_err(|e| e.to_string())?;
     }
+
+    // Start the global input listener for paste interception (Ctrl+V, right-click, etc.)
+    let pending_for_input = state.pending_anonymization.clone();
+    start_input_listener(pending_for_input, app_handle.clone());
 
     // Start clipboard watcher in a background task
     let sidecar = state.sidecar.clone();
@@ -100,10 +213,7 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
                     match result {
                         Ok(analysis) => {
                             if !analysis.entities.is_empty() {
-                                log::info!(
-                                    "Detected {} PII entities",
-                                    analysis.entities.len()
-                                );
+                                log::info!("Detected {} PII entities", analysis.entities.len());
 
                                 // Store anonymized text for auto-replacement
                                 {
@@ -166,9 +276,12 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
                             *handled = true;
 
                             // Notify frontend
-                            let _ = app_handle_clone.emit("auto-anonymized", serde_json::json!({
-                                "app_name": app_name
-                            }));
+                            let _ = app_handle_clone.emit(
+                                "auto-anonymized",
+                                serde_json::json!({
+                                    "app_name": app_name
+                                }),
+                            );
                         }
                     } else {
                         log::debug!("No pending anonymization for browser");

@@ -129,7 +129,10 @@ impl PresidioSidecar {
         }
 
         // If no sidecar found, return error
-        log::error!("No sidecar found. Current dir: {:?}", std::env::current_dir().ok());
+        log::error!(
+            "No sidecar found. Current dir: {:?}",
+            std::env::current_dir().ok()
+        );
         Err(SidecarError::StartError(
             "Presidio sidecar not found. Make sure presidio_sidecar.py exists in the sidecar directory.".to_string()
         ))
@@ -166,7 +169,9 @@ impl PresidioSidecar {
             .stderr(Stdio::piped())
             .kill_on_drop(true)
             .spawn()
-            .map_err(|e| SidecarError::StartError(format!("Failed to start Python ({}): {}", python_cmd, e)))?;
+            .map_err(|e| {
+                SidecarError::StartError(format!("Failed to start Python ({}): {}", python_cmd, e))
+            })?;
 
         self.setup_io_channels(&mut child).await?;
         self.child = Some(child);
@@ -300,9 +305,9 @@ impl PresidioSidecar {
 
         // Send request
         if let Some(ref tx) = self.stdin_tx {
-            tx.send(request_json)
-                .await
-                .map_err(|e| SidecarError::CommunicationError(format!("Failed to send to sidecar: {}", e)))?;
+            tx.send(request_json).await.map_err(|e| {
+                SidecarError::CommunicationError(format!("Failed to send to sidecar: {}", e))
+            })?;
         }
 
         // Wait for response with timeout
@@ -311,8 +316,9 @@ impl PresidioSidecar {
             match tokio::time::timeout(std::time::Duration::from_secs(5), rx_guard.recv()).await {
                 Ok(Some(line)) => {
                     log::debug!("Received response from sidecar: {}", line);
-                    let response: SidecarResponse = serde_json::from_str(&line)
-                        .map_err(|e| SidecarError::ParseError(format!("Failed to parse response: {}", e)))?;
+                    let response: SidecarResponse = serde_json::from_str(&line).map_err(|e| {
+                        SidecarError::ParseError(format!("Failed to parse response: {}", e))
+                    })?;
 
                     if !response.success {
                         if let Some(error) = response.error {
@@ -328,7 +334,9 @@ impl PresidioSidecar {
                 }
                 Ok(None) => {
                     log::error!("Sidecar closed unexpectedly during analysis");
-                    return Err(SidecarError::CommunicationError("Sidecar closed".to_string()));
+                    return Err(SidecarError::CommunicationError(
+                        "Sidecar closed".to_string(),
+                    ));
                 }
                 Err(_) => {
                     log::error!("Timeout waiting for sidecar response");
@@ -440,7 +448,9 @@ mod tests {
     #[test]
     fn test_mock_email_detection() {
         let sidecar = PresidioSidecar::new();
-        let result = sidecar.mock_analyze("Contact me at john.doe@example.com").unwrap();
+        let result = sidecar
+            .mock_analyze("Contact me at john.doe@example.com")
+            .unwrap();
 
         assert_eq!(result.entities.len(), 1);
         assert_eq!(result.entities[0].entity_type, "EMAIL_ADDRESS");
