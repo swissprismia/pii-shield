@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(timeout:*)",
+      "Bash(npm run tauri:*)",
+      "Bash(cargo run:*)",
+      "Bash(dir \"C:\\_git\\poc\\app-presidio\\src-tauri\")",
+      "Bash(dir \"C:\\_git\\poc\\app-presidio\\src-tauri\\gen\")",
+      "Bash(dir \"C:\\_git\\poc\\app-presidio\\src-tauri\\binaries\")",
+      "Bash(dir \"C:\\_git\\poc\\app-presidio\")",
+      "Bash(dir \"C:\\_git\\poc\\app-presidio\\sidecar\")"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
