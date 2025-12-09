@@ -38,11 +38,32 @@ pub struct AnalysisResult {
     pub entities: Vec<PiiEntity>,
 }
 
+/// Tokenization result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenizationResult {
+    pub original_text: String,
+    pub tokenized_text: String,
+    pub token_map: std::collections::HashMap<String, String>,
+    pub entities: Vec<PiiEntity>,
+}
+
+/// De-tokenization result
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DetokenizationResult {
+    pub tokenized_text: String,
+    pub detokenized_text: String,
+}
+
 /// Request to the sidecar
 #[derive(Debug, Serialize, Deserialize)]
 struct SidecarRequest {
     action: String,
-    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entities: Option<Vec<PiiEntity>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token_map: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Response from the sidecar
@@ -55,6 +76,21 @@ struct SidecarResponse {
     entities: Vec<PiiEntity>,
     #[serde(default)]
     error: Option<String>,
+    // Tokenization fields
+    #[serde(default)]
+    tokenized_text: String,
+    #[serde(default)]
+    token_map: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    original_text: String,
+    // De-tokenization fields
+    #[serde(default)]
+    detokenized_text: String,
+    // Token detection fields
+    #[serde(default)]
+    tokens: Vec<String>,
+    #[serde(default)]
+    has_tokens: bool,
 }
 
 use std::sync::Arc;
@@ -288,17 +324,12 @@ impl PresidioSidecar {
         }
     }
 
-    /// Analyze text for PII
-    pub async fn analyze(&self, text: &str) -> Result<AnalysisResult, SidecarError> {
+    /// Send a request to the sidecar and get a response
+    async fn send_request(&self, request: SidecarRequest) -> Result<SidecarResponse, SidecarError> {
         // Check if sidecar is running
         if self.stdin_tx.is_none() || self.response_rx.is_none() {
             return Err(SidecarError::NotRunning);
         }
-
-        let request = SidecarRequest {
-            action: "analyze".to_string(),
-            text: text.to_string(),
-        };
 
         let request_json =
             serde_json::to_string(&request).map_err(|e| SidecarError::ParseError(e.to_string()))?;
@@ -326,14 +357,10 @@ impl PresidioSidecar {
                         }
                     }
 
-                    return Ok(AnalysisResult {
-                        original_text: text.to_string(),
-                        anonymized_text: response.anonymized_text,
-                        entities: response.entities,
-                    });
+                    return Ok(response);
                 }
                 Ok(None) => {
-                    log::error!("Sidecar closed unexpectedly during analysis");
+                    log::error!("Sidecar closed unexpectedly");
                     return Err(SidecarError::CommunicationError(
                         "Sidecar closed".to_string(),
                     ));
@@ -346,6 +373,78 @@ impl PresidioSidecar {
         }
 
         Err(SidecarError::NotRunning)
+    }
+
+    /// Analyze text for PII
+    pub async fn analyze(&self, text: &str) -> Result<AnalysisResult, SidecarError> {
+        let request = SidecarRequest {
+            action: "analyze".to_string(),
+            text: Some(text.to_string()),
+            entities: None,
+            token_map: None,
+        };
+
+        let response = self.send_request(request).await?;
+
+        Ok(AnalysisResult {
+            original_text: text.to_string(),
+            anonymized_text: response.anonymized_text,
+            entities: response.entities,
+        })
+    }
+
+    /// Analyze text for PII and tokenize it in one step
+    pub async fn analyze_and_tokenize(&self, text: &str) -> Result<TokenizationResult, SidecarError> {
+        let request = SidecarRequest {
+            action: "analyze_and_tokenize".to_string(),
+            text: Some(text.to_string()),
+            entities: None,
+            token_map: None,
+        };
+
+        let response = self.send_request(request).await?;
+
+        Ok(TokenizationResult {
+            original_text: text.to_string(),
+            tokenized_text: response.tokenized_text,
+            token_map: response.token_map,
+            entities: response.entities,
+        })
+    }
+
+    /// De-tokenize text by replacing tokens with original values
+    pub async fn detokenize(
+        &self,
+        text: &str,
+        token_map: std::collections::HashMap<String, String>,
+    ) -> Result<DetokenizationResult, SidecarError> {
+        let request = SidecarRequest {
+            action: "detokenize".to_string(),
+            text: Some(text.to_string()),
+            entities: None,
+            token_map: Some(token_map),
+        };
+
+        let response = self.send_request(request).await?;
+
+        Ok(DetokenizationResult {
+            tokenized_text: text.to_string(),
+            detokenized_text: response.detokenized_text,
+        })
+    }
+
+    /// Detect if text contains tokens
+    pub async fn detect_tokens(&self, text: &str) -> Result<(bool, Vec<String>), SidecarError> {
+        let request = SidecarRequest {
+            action: "detect_tokens".to_string(),
+            text: Some(text.to_string()),
+            entities: None,
+            token_map: None,
+        };
+
+        let response = self.send_request(request).await?;
+
+        Ok((response.has_tokens, response.tokens))
     }
 
     /// Mock analysis using simple pattern matching

@@ -39,13 +39,20 @@
               <pre class="preview-text" id="original-text"></pre>
             </div>
             <div class="preview-container">
-              <div class="preview-label">Anonymized</div>
-              <pre class="preview-text anonymized" id="anonymized-text"></pre>
+              <div class="preview-label">Tokenized</div>
+              <pre class="preview-text tokenized" id="tokenized-text"></pre>
             </div>
+          </div>
+          <div class="token-map-section" id="token-map-section" style="display: none;">
+            <h3>Token Mappings</h3>
+            <div class="token-map-list" id="token-map-list">
+              <!-- Token mappings will be inserted here -->
+            </div>
+            <button class="btn btn-small btn-secondary" id="btn-clear-vault">Clear Vault</button>
           </div>
           <div class="actions">
             <button class="btn btn-secondary" id="btn-ignore">Ignore</button>
-            <button class="btn btn-primary" id="btn-anonymize">Anonymize & Copy</button>
+            <button class="btn btn-primary" id="btn-tokenize">Tokenize & Copy</button>
           </div>
         </section>
 
@@ -60,7 +67,7 @@
               <path d="M16 32h32M16 40h24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
             </svg>
             <h2>Clipboard Monitoring Active</h2>
-            <p>Copy text from any application. PII Shield will automatically detect sensitive information.</p>
+            <p>Copy text with PII to tokenize it before pasting to AI. Copy AI responses to automatically restore original values.</p>
           </div>
         </section>
 
@@ -69,22 +76,26 @@
           <div class="stats-grid">
             <div class="stat-card">
               <span class="stat-value" id="stat-scanned">0</span>
-              <span class="stat-label">Clips Scanned</span>
+              <span class="stat-label">Scanned</span>
             </div>
             <div class="stat-card">
               <span class="stat-value" id="stat-detected">0</span>
-              <span class="stat-label">PII Detected</span>
+              <span class="stat-label">PII Found</span>
             </div>
             <div class="stat-card">
-              <span class="stat-value" id="stat-anonymized">0</span>
-              <span class="stat-label">Anonymized</span>
+              <span class="stat-value" id="stat-tokenized">0</span>
+              <span class="stat-label">Tokenized</span>
+            </div>
+            <div class="stat-card">
+              <span class="stat-value" id="stat-detokenized">0</span>
+              <span class="stat-label">Restored</span>
             </div>
           </div>
         </section>
       </main>
 
       <footer class="footer">
-        <span>PII Shield v0.1.0</span>
+        <span>PII Shield v0.2.0</span>
         <span id="active-window">—</span>
       </footer>
     </div>

@@ -5,12 +5,14 @@ import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 // State
 let state = {
   originalText: '',
-  anonymizedText: '',
+  tokenizedText: '',
   entities: [],
+  tokenMap: {},
   stats: {
     scanned: 0,
     detected: 0,
-    anonymized: 0,
+    tokenized: 0,
+    detokenized: 0,
   },
 };
 
@@ -20,13 +22,17 @@ const elements = {
   emptySection: document.getElementById('empty-section'),
   detectionList: document.getElementById('detection-list'),
   originalText: document.getElementById('original-text'),
-  anonymizedText: document.getElementById('anonymized-text'),
+  tokenizedText: document.getElementById('tokenized-text'),
+  tokenMapSection: document.getElementById('token-map-section'),
+  tokenMapList: document.getElementById('token-map-list'),
   piiCount: document.getElementById('pii-count'),
-  btnAnonymize: document.getElementById('btn-anonymize'),
+  btnTokenize: document.getElementById('btn-tokenize'),
   btnIgnore: document.getElementById('btn-ignore'),
+  btnClearVault: document.getElementById('btn-clear-vault'),
   statScanned: document.getElementById('stat-scanned'),
   statDetected: document.getElementById('stat-detected'),
-  statAnonymized: document.getElementById('stat-anonymized'),
+  statTokenized: document.getElementById('stat-tokenized'),
+  statDetokenized: document.getElementById('stat-detokenized'),
   activeWindow: document.getElementById('active-window'),
   toastContainer: document.getElementById('toast-container'),
 };
@@ -95,7 +101,8 @@ function updateUI() {
   // Update stats
   elements.statScanned.textContent = state.stats.scanned;
   elements.statDetected.textContent = state.stats.detected;
-  elements.statAnonymized.textContent = state.stats.anonymized;
+  elements.statTokenized.textContent = state.stats.tokenized;
+  elements.statDetokenized.textContent = state.stats.detokenized;
 
   if (state.entities.length > 0) {
     // Show detection section
@@ -123,11 +130,31 @@ function updateUI() {
 
     // Update preview texts
     elements.originalText.textContent = state.originalText;
-    elements.anonymizedText.textContent = state.anonymizedText;
+    elements.tokenizedText.textContent = state.tokenizedText;
+
+    // Update token map display
+    if (Object.keys(state.tokenMap).length > 0) {
+      elements.tokenMapSection.style.display = 'block';
+      elements.tokenMapList.innerHTML = Object.entries(state.tokenMap)
+        .map(([token, value]) => {
+          const truncatedValue = value.length > 20 ? value.substring(0, 20) + '...' : value;
+          return `
+            <div class="token-mapping">
+              <span class="token-id">[${escapeHtml(token)}]</span>
+              <span class="token-arrow">→</span>
+              <span class="token-value">${escapeHtml(truncatedValue)}</span>
+            </div>
+          `;
+        })
+        .join('');
+    } else {
+      elements.tokenMapSection.style.display = 'none';
+    }
   } else {
     // Show empty state
     elements.detectionSection.style.display = 'none';
     elements.emptySection.style.display = 'block';
+    elements.tokenMapSection.style.display = 'none';
   }
 }
 
@@ -137,30 +164,31 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// Handle anonymize button click
-async function handleAnonymize() {
+// Handle tokenize button click
+async function handleTokenize() {
   try {
-    console.log('✅ PASTED TO CLIPBOARD:', state.anonymizedText);
+    console.log('Tokenizing and copying to clipboard:', state.tokenizedText);
 
-    // Copy anonymized text to clipboard
-    await writeText(state.anonymizedText);
+    // Copy tokenized text to clipboard
+    await writeText(state.tokenizedText);
 
     // Update stats
-    state.stats.anonymized++;
+    state.stats.tokenized++;
 
     // Reset detection state
     state.originalText = '';
-    state.anonymizedText = '';
+    state.tokenizedText = '';
     state.entities = [];
+    // Keep tokenMap for de-tokenization later!
 
     updateUI();
 
-    showToast('Anonymized', 'Safe text copied to clipboard', 'success');
+    showToast('Tokenized', 'Tokenized text copied to clipboard', 'success');
 
     // Notify backend that we've handled this clipboard content
     await invoke('mark_clipboard_handled');
   } catch (error) {
-    console.error('Failed to copy anonymized text:', error);
+    console.error('Failed to copy tokenized text:', error);
     showToast('Error', 'Failed to copy to clipboard', 'error');
   }
 }
@@ -169,8 +197,9 @@ async function handleAnonymize() {
 async function handleIgnore() {
   // Reset detection state without copying
   state.originalText = '';
-  state.anonymizedText = '';
+  state.tokenizedText = '';
   state.entities = [];
+  state.tokenMap = {};
 
   updateUI();
 
@@ -182,24 +211,41 @@ async function handleIgnore() {
   }
 }
 
+// Handle clear vault button click
+async function handleClearVault() {
+  try {
+    await invoke('clear_token_vault');
+    state.tokenMap = {};
+    showToast('Vault Cleared', 'Token mappings have been cleared', 'info');
+  } catch (error) {
+    console.error('Failed to clear token vault:', error);
+    showToast('Error', 'Failed to clear token vault', 'error');
+  }
+}
+
 // Initialize event listeners
 function initEventListeners() {
-  elements.btnAnonymize.addEventListener('click', handleAnonymize);
+  elements.btnTokenize.addEventListener('click', handleTokenize);
   elements.btnIgnore.addEventListener('click', handleIgnore);
+  if (elements.btnClearVault) {
+    elements.btnClearVault.addEventListener('click', handleClearVault);
+  }
 }
 
 // Listen for events from Rust backend
 async function initTauriListeners() {
-  // Listen for PII detection results
+  // Listen for PII detection results (now includes tokenization)
   await listen('pii-detected', (event) => {
-    const { original_text, anonymized_text, entities } = event.payload;
+    const { original_text, tokenized_text, token_map, entities } = event.payload;
 
-    console.log('📋 COPIED:', original_text);
-    console.log('⚠️ PII DETECTED:', entities.length, 'items');
-    console.log('🔒 WILL PASTE:', anonymized_text);
+    console.log('Copied:', original_text);
+    console.log('PII Detected:', entities.length, 'items');
+    console.log('Tokenized:', tokenized_text);
+    console.log('Token map:', token_map);
 
     state.originalText = original_text;
-    state.anonymizedText = anonymized_text;
+    state.tokenizedText = tokenized_text;
+    state.tokenMap = token_map || {};
     state.entities = entities;
     state.stats.scanned++;
     state.stats.detected += entities.length;
@@ -209,7 +255,7 @@ async function initTauriListeners() {
     // Show toast notification
     showToast(
       `${entities.length} PII item${entities.length > 1 ? 's' : ''} detected`,
-      'Click to view and anonymize',
+      'Click to view and tokenize',
       'warning',
       5000,
       () => {
@@ -239,19 +285,37 @@ async function initTauriListeners() {
     }
   });
 
-  // Listen for auto-anonymization events
-  await listen('auto-anonymized', (event) => {
-    const { app_name } = event.payload;
-    console.log('✅ Auto-anonymized for:', app_name);
-    showToast('Auto-Anonymized', `Safe text ready to paste in ${app_name}`, 'success', 3000);
+  // Listen for auto-tokenization events (when pasting in browser)
+  await listen('auto-tokenized', (event) => {
+    const { app_name, tokenized_text, token_map } = event.payload;
+    console.log('Auto-tokenized for:', app_name);
+    console.log('Tokenized text:', tokenized_text);
+    showToast('Auto-Tokenized', `Tokenized text ready to paste in ${app_name}`, 'success', 3000);
 
     // Update stats
-    state.stats.anonymized++;
+    state.stats.tokenized++;
+
+    // Store token map for later de-tokenization
+    state.tokenMap = token_map || {};
 
     // Clear detection state
     state.originalText = '';
-    state.anonymizedText = '';
+    state.tokenizedText = '';
     state.entities = [];
+
+    updateUI();
+  });
+
+  // Listen for auto-detokenization events (when copying AI response with tokens)
+  await listen('auto-detokenized', (event) => {
+    const { original_text, detokenized_text, token_map } = event.payload;
+    console.log('Auto-detokenized!');
+    console.log('Original (with tokens):', original_text);
+    console.log('Detokenized:', detokenized_text);
+    showToast('Auto-Detokenized', 'Original PII restored from AI response', 'success', 3000);
+
+    // Update stats
+    state.stats.detokenized++;
 
     updateUI();
   });

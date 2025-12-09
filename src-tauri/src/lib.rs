@@ -6,7 +6,8 @@ mod window;
 use clipboard::ClipboardWatcher;
 use parking_lot::Mutex;
 use rdev::{listen, Button, Event, EventType, Key};
-use sidecar::PresidioSidecar;
+use sidecar::{PresidioSidecar, TokenizationResult};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{
@@ -34,6 +35,55 @@ fn should_auto_anonymize(window_info: &window::WindowInfo, keywords: &[String]) 
 /// Shared state for keyboard hook (needs to be 'static for rdev callback)
 static CTRL_PRESSED: AtomicBool = AtomicBool::new(false);
 
+/// Token vault for storing PII token mappings
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct TokenVault {
+    /// Maps token IDs to original values (e.g., "FirstName1" -> "John")
+    pub token_map: HashMap<String, String>,
+    /// The original text before tokenization
+    pub original_text: String,
+    /// The tokenized text
+    pub tokenized_text: String,
+    /// Timestamp when this vault was created
+    pub created_at: u64,
+}
+
+impl TokenVault {
+    pub fn new() -> Self {
+        Self {
+            token_map: HashMap::new(),
+            original_text: String::new(),
+            tokenized_text: String::new(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        }
+    }
+
+    pub fn from_tokenization(result: &TokenizationResult) -> Self {
+        Self {
+            token_map: result.token_map.clone(),
+            original_text: result.original_text.clone(),
+            tokenized_text: result.tokenized_text.clone(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.token_map.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.token_map.clear();
+        self.original_text.clear();
+        self.tokenized_text.clear();
+    }
+}
+
 /// Application state shared across the Tauri app
 pub struct AppState {
     clipboard_watcher: Mutex<Option<ClipboardWatcher>>,
@@ -42,6 +92,10 @@ pub struct AppState {
     clipboard_handled: Mutex<bool>,
     pending_anonymization: Arc<Mutex<Option<String>>>,
     config: config::Config,
+    /// Token vault for storing PII token mappings for de-tokenization
+    token_vault: Arc<Mutex<TokenVault>>,
+    /// Pending tokenization result (used when auto-tokenizing in browsers)
+    pending_tokenization: Arc<Mutex<Option<TokenizationResult>>>,
 }
 
 impl AppState {
@@ -56,13 +110,16 @@ impl AppState {
             clipboard_handled: Mutex::new(false),
             pending_anonymization: Arc::new(Mutex::new(None)),
             config,
+            token_vault: Arc::new(Mutex::new(TokenVault::new())),
+            pending_tokenization: Arc::new(Mutex::new(None)),
         }
     }
 }
 
-/// Helper function to anonymize clipboard if in browser with pending anonymization
-fn try_anonymize_for_browser(
-    pending_anonymization: &Arc<Mutex<Option<String>>>,
+/// Helper function to tokenize clipboard if in browser with pending tokenization
+fn try_tokenize_for_browser(
+    pending_tokenization: &Arc<Mutex<Option<TokenizationResult>>>,
+    token_vault: &Arc<Mutex<TokenVault>>,
     app_handle: &AppHandle,
     trigger: &str,
 ) {
@@ -73,30 +130,39 @@ fn try_anonymize_for_browser(
         let should_anonymize = should_auto_anonymize(&window_info, &keywords);
 
         if should_anonymize {
-            // Check if we have pending anonymization
-            let mut pending = pending_anonymization.lock();
-            if let Some(anonymized_text) = pending.take() {
+            // Check if we have pending tokenization
+            let mut pending = pending_tokenization.lock();
+            if let Some(tokenization_result) = pending.take() {
                 let app_name = window_info.app_name.as_deref().unwrap_or("app");
                 log::info!(
-                    "{} in browser detected! Auto-anonymizing for: {}",
+                    "{} in browser detected! Auto-tokenizing for: {}",
                     trigger,
                     app_name
                 );
 
-                // Replace clipboard with anonymized text BEFORE paste completes
-                if let Err(e) = clipboard::set_clipboard_text(&anonymized_text) {
-                    log::error!("Failed to auto-anonymize clipboard: {}", e);
+                // Store the token mapping in the vault for later de-tokenization
+                {
+                    let mut vault = token_vault.lock();
+                    *vault = TokenVault::from_tokenization(&tokenization_result);
+                    log::info!("Token vault updated with {} tokens", vault.token_map.len());
+                }
+
+                // Replace clipboard with tokenized text BEFORE paste completes
+                if let Err(e) = clipboard::set_clipboard_text(&tokenization_result.tokenized_text) {
+                    log::error!("Failed to auto-tokenize clipboard: {}", e);
                     // Put it back for retry
-                    *pending = Some(anonymized_text);
+                    *pending = Some(tokenization_result);
                 } else {
-                    log::info!("Clipboard replaced successfully before paste!");
+                    log::info!("Clipboard replaced with tokenized text successfully!");
 
                     // Notify frontend
                     let _ = app_handle.emit(
-                        "auto-anonymized",
+                        "auto-tokenized",
                         serde_json::json!({
                             "app_name": app_name,
-                            "trigger": trigger
+                            "trigger": trigger,
+                            "tokenized_text": tokenization_result.tokenized_text,
+                            "token_map": tokenization_result.token_map,
                         }),
                     );
                 }
@@ -105,8 +171,42 @@ fn try_anonymize_for_browser(
     }
 }
 
+/// Check if text contains tokens that we can de-tokenize
+fn contains_known_tokens(text: &str, token_vault: &TokenVault) -> bool {
+    if token_vault.is_empty() {
+        return false;
+    }
+
+    // Check if any of our token IDs appear in the text
+    for token_id in token_vault.token_map.keys() {
+        let token_pattern = format!("[{}]", token_id);
+        if text.contains(&token_pattern) {
+            return true;
+        }
+    }
+    false
+}
+
+/// De-tokenize text using the token vault
+fn detokenize_with_vault(text: &str, token_vault: &TokenVault) -> String {
+    if token_vault.is_empty() {
+        return text.to_string();
+    }
+
+    let mut result = text.to_string();
+    for (token_id, original_value) in &token_vault.token_map {
+        let token_pattern = format!("[{}]", token_id);
+        result = result.replace(&token_pattern, original_value);
+    }
+    result
+}
+
 /// Start the global input listener to intercept paste actions (Ctrl+V, Ctrl+X, right-click)
-fn start_input_listener(pending_anonymization: Arc<Mutex<Option<String>>>, app_handle: AppHandle) {
+fn start_input_listener(
+    pending_tokenization: Arc<Mutex<Option<TokenizationResult>>>,
+    token_vault: Arc<Mutex<TokenVault>>,
+    app_handle: AppHandle,
+) {
     std::thread::spawn(move || {
         log::info!("Starting global input listener for paste interception...");
 
@@ -125,11 +225,16 @@ fn start_input_listener(pending_anonymization: Arc<Mutex<Option<String>>>, app_h
                 EventType::KeyPress(Key::KeyV) => {
                     if CTRL_PRESSED.load(Ordering::SeqCst) {
                         log::debug!("Ctrl+V detected!");
-                        try_anonymize_for_browser(&pending_anonymization, &app_handle, "Ctrl+V");
+                        try_tokenize_for_browser(
+                            &pending_tokenization,
+                            &token_vault,
+                            &app_handle,
+                            "Ctrl+V",
+                        );
                     }
                 }
 
-                // Ctrl+X - Cut operation (anonymize in case they paste later)
+                // Ctrl+X - Cut operation (tokenize in case they paste later)
                 EventType::KeyPress(Key::KeyX) => {
                     if CTRL_PRESSED.load(Ordering::SeqCst) {
                         log::debug!("Ctrl+X detected - clipboard will be re-analyzed on change");
@@ -142,8 +247,9 @@ fn start_input_listener(pending_anonymization: Arc<Mutex<Option<String>>>, app_h
                 // Pre-emptively replace clipboard when right-clicking in a browser
                 EventType::ButtonPress(Button::Right) => {
                     log::debug!("Right-click detected!");
-                    try_anonymize_for_browser(
-                        &pending_anonymization,
+                    try_tokenize_for_browser(
+                        &pending_tokenization,
+                        &token_vault,
                         &app_handle,
                         "Right-click menu",
                     );
@@ -162,7 +268,7 @@ fn start_input_listener(pending_anonymization: Arc<Mutex<Option<String>>>, app_h
 /// Start clipboard monitoring
 #[tauri::command]
 async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    log::info!("Starting clipboard monitoring...");
+    log::info!("Starting clipboard monitoring with tokenization support...");
 
     // Start the sidecar process
     {
@@ -174,11 +280,13 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
     }
 
     // Start the global input listener for paste interception (Ctrl+V, right-click, etc.)
-    let pending_for_input = state.pending_anonymization.clone();
-    start_input_listener(pending_for_input, app_handle.clone());
+    let pending_for_input = state.pending_tokenization.clone();
+    let token_vault_for_input = state.token_vault.clone();
+    start_input_listener(pending_for_input, token_vault_for_input, app_handle.clone());
 
     // Start clipboard watcher in a background task
     let sidecar = state.sidecar.clone();
+    let token_vault = state.token_vault.clone();
     let app_handle_clone = app_handle.clone();
 
     tokio::spawn(async move {
@@ -209,48 +317,99 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
                 };
 
                 if should_process && !text.trim().is_empty() {
-                    log::debug!("New clipboard content detected, analyzing...");
-
-                    // Analyze with Presidio
-                    let result = {
-                        let sidecar = sidecar.lock().await;
-                        sidecar.analyze(&text).await
+                    // First, check if this text contains tokens we can de-tokenize
+                    let should_detokenize = {
+                        let vault = token_vault.lock();
+                        contains_known_tokens(&text, &vault)
                     };
 
-                    match result {
-                        Ok(analysis) => {
-                            if !analysis.entities.is_empty() {
-                                log::info!("Detected {} PII entities", analysis.entities.len());
+                    if should_detokenize {
+                        // De-tokenize the text
+                        let detokenized = {
+                            let vault = token_vault.lock();
+                            detokenize_with_vault(&text, &vault)
+                        };
 
-                                // Store anonymized text for auto-replacement
-                                {
-                                    let state = app_handle_clone.state::<AppState>();
-                                    let mut pending = state.pending_anonymization.lock();
-                                    *pending = Some(analysis.anonymized_text.clone());
-                                }
+                        log::info!("Detected tokens in clipboard, de-tokenizing...");
+                        log::debug!("Original: {}", text);
+                        log::debug!("De-tokenized: {}", detokenized);
 
-                                // Emit event to frontend
-                                let _ = app_handle_clone.emit("pii-detected", &analysis);
-                            } else {
-                                // No PII found, just update stats
-                                let _ = app_handle_clone.emit("clipboard-scanned", ());
+                        // Replace clipboard with de-tokenized text
+                        if let Err(e) = clipboard::set_clipboard_text(&detokenized) {
+                            log::error!("Failed to de-tokenize clipboard: {}", e);
+                        } else {
+                            // Mark as handled
+                            {
+                                let state = app_handle_clone.state::<AppState>();
+                                let mut handled = state.clipboard_handled.lock();
+                                *handled = true;
                             }
-                        }
-                        Err(e) => {
-                            log::error!("Failed to analyze clipboard: {}", e);
+
+                            // Get the token map for the event
+                            let token_map = {
+                                let vault = token_vault.lock();
+                                vault.token_map.clone()
+                            };
+
+                            // Notify frontend
                             let _ = app_handle_clone.emit(
-                                "sidecar-status",
+                                "auto-detokenized",
                                 serde_json::json!({
-                                    "status": "error",
-                                    "message": e.to_string()
+                                    "original_text": text,
+                                    "detokenized_text": detokenized,
+                                    "token_map": token_map,
                                 }),
                             );
+                        }
+                    } else {
+                        // No tokens found, analyze for PII and tokenize
+                        log::debug!("New clipboard content detected, analyzing for PII...");
+
+                        // Analyze and tokenize with Presidio
+                        let result = {
+                            let sidecar = sidecar.lock().await;
+                            sidecar.analyze_and_tokenize(&text).await
+                        };
+
+                        match result {
+                            Ok(tokenization) => {
+                                if !tokenization.entities.is_empty() {
+                                    log::info!(
+                                        "Detected {} PII entities, tokenized with {} tokens",
+                                        tokenization.entities.len(),
+                                        tokenization.token_map.len()
+                                    );
+
+                                    // Store tokenization result for auto-replacement
+                                    {
+                                        let state = app_handle_clone.state::<AppState>();
+                                        let mut pending = state.pending_tokenization.lock();
+                                        *pending = Some(tokenization.clone());
+                                    }
+
+                                    // Emit event to frontend
+                                    let _ = app_handle_clone.emit("pii-detected", &tokenization);
+                                } else {
+                                    // No PII found, just update stats
+                                    let _ = app_handle_clone.emit("clipboard-scanned", ());
+                                }
+                            }
+                            Err(e) => {
+                                log::error!("Failed to analyze clipboard: {}", e);
+                                let _ = app_handle_clone.emit(
+                                    "sidecar-status",
+                                    serde_json::json!({
+                                        "status": "error",
+                                        "message": e.to_string()
+                                    }),
+                                );
+                            }
                         }
                     }
                 }
             }
 
-            // Update active window info periodically and auto-anonymize in browsers/AI apps
+            // Update active window info periodically and auto-tokenize in browsers/AI apps
             if let Some(window_info) = window::get_active_window() {
                 // Check if we're in a browser or AI assistant app
                 let keywords = {
@@ -266,18 +425,24 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
 
                 if should_anonymize {
                     let state = app_handle_clone.state::<AppState>();
-                    let mut pending = state.pending_anonymization.lock();
+                    let mut pending = state.pending_tokenization.lock();
 
-                    if let Some(anonymized_text) = pending.take() {
+                    if let Some(tokenization_result) = pending.take() {
                         let app_name = window_info.app_name.as_deref().unwrap_or("browser");
-                        log::info!("🔄 Auto-anonymizing clipboard for browser: {}", app_name);
-                        log::info!("📋 Replacing clipboard with: {}", anonymized_text);
+                        log::info!("Auto-tokenizing clipboard for browser: {}", app_name);
 
-                        // Replace clipboard with anonymized text
-                        if let Err(e) = clipboard::set_clipboard_text(&anonymized_text) {
-                            log::error!("Failed to auto-anonymize clipboard: {}", e);
+                        // Store the token mapping in the vault for later de-tokenization
+                        {
+                            let mut vault = state.token_vault.lock();
+                            *vault = TokenVault::from_tokenization(&tokenization_result);
+                            log::info!("Token vault updated with {} tokens", vault.token_map.len());
+                        }
+
+                        // Replace clipboard with tokenized text
+                        if let Err(e) = clipboard::set_clipboard_text(&tokenization_result.tokenized_text) {
+                            log::error!("Failed to auto-tokenize clipboard: {}", e);
                         } else {
-                            log::info!("✅ Clipboard replaced successfully");
+                            log::info!("Clipboard replaced with tokenized text");
 
                             // Mark as handled
                             let mut handled = state.clipboard_handled.lock();
@@ -285,14 +450,14 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
 
                             // Notify frontend
                             let _ = app_handle_clone.emit(
-                                "auto-anonymized",
+                                "auto-tokenized",
                                 serde_json::json!({
-                                    "app_name": app_name
+                                    "app_name": app_name,
+                                    "tokenized_text": tokenization_result.tokenized_text,
+                                    "token_map": tokenization_result.token_map,
                                 }),
                             );
                         }
-                    } else {
-                        log::debug!("No pending anonymization for browser");
                     }
                 }
 
@@ -317,6 +482,57 @@ async fn mark_clipboard_handled(state: State<'_, AppState>) -> Result<(), String
 async fn get_sidecar_status(state: State<'_, AppState>) -> Result<bool, String> {
     let sidecar = state.sidecar.lock().await;
     Ok(sidecar.is_running())
+}
+
+/// Get the current token vault
+#[tauri::command]
+async fn get_token_vault(state: State<'_, AppState>) -> Result<TokenVault, String> {
+    let vault = state.token_vault.lock();
+    Ok(vault.clone())
+}
+
+/// Clear the token vault
+#[tauri::command]
+async fn clear_token_vault(state: State<'_, AppState>) -> Result<(), String> {
+    let mut vault = state.token_vault.lock();
+    vault.clear();
+    log::info!("Token vault cleared");
+    Ok(())
+}
+
+/// Manually tokenize text and copy to clipboard
+#[tauri::command]
+async fn tokenize_and_copy(
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<TokenizationResult, String> {
+    let sidecar = state.sidecar.lock().await;
+    let result = sidecar
+        .analyze_and_tokenize(&text)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // Store in vault
+    {
+        let mut vault = state.token_vault.lock();
+        *vault = TokenVault::from_tokenization(&result);
+    }
+
+    // Copy tokenized text to clipboard
+    clipboard::set_clipboard_text(&result.tokenized_text).map_err(|e| e.to_string())?;
+
+    Ok(result)
+}
+
+/// Manually de-tokenize text using the current vault
+#[tauri::command]
+async fn detokenize_text(
+    text: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let vault = state.token_vault.lock();
+    let detokenized = detokenize_with_vault(&text, &vault);
+    Ok(detokenized)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -376,6 +592,10 @@ pub fn run() {
             start_monitoring,
             mark_clipboard_handled,
             get_sidecar_status,
+            get_token_vault,
+            clear_token_vault,
+            tokenize_and_copy,
+            detokenize_text,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

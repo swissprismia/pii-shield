@@ -198,9 +198,63 @@ body {
   color: var(--text-secondary);
 }
 
-.preview-text.anonymized {
+.preview-text.anonymized,
+.preview-text.tokenized {
   border-color: var(--accent);
   color: var(--text-primary);
+}
+
+/* Token Map Section */
+.token-map-section {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.token-map-section h3 {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 12px;
+}
+
+.token-map-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.token-mapping {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+}
+
+.token-id {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.token-arrow {
+  color: var(--text-muted);
+}
+
+.token-value {
+  color: var(--text-primary);
+}
+
+.btn-small {
+  padding: 6px 12px;
+  font-size: 12px;
+  flex: none;
 }
 
 /* Actions */
@@ -276,27 +330,27 @@ body {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
 }
 
 .stat-card {
   background: var(--bg-tertiary);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 12px 8px;
   text-align: center;
 }
 
 .stat-value {
   display: block;
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 600;
   color: var(--accent);
 }
 
 .stat-label {
   display: block;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-muted);
   margin-top: 4px;
 }

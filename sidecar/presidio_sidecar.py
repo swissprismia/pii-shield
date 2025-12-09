@@ -11,12 +11,22 @@ Communication Protocol:
 - Output: JSON lines via stdout
 - Format: {"action": "analyze", "text": "..."}
 - Response: {"success": true, "anonymized_text": "...", "entities": [...]}
+
+Tokenization Protocol:
+- Format: {"action": "tokenize", "text": "...", "entities": [...]}
+- Response: {"success": true, "tokenized_text": "...", "token_map": {...}}
+
+De-tokenization Protocol:
+- Format: {"action": "detokenize", "text": "...", "token_map": {...}}
+- Response: {"success": true, "detokenized_text": "..."}
 """
 
 import json
 import sys
 import signal
-from typing import Optional
+import re
+from typing import Optional, Dict, List, Tuple
+from collections import defaultdict
 
 
 def setup_presidio():
@@ -189,6 +199,165 @@ def fallback_analyze(text: str) -> dict:
     }
 
 
+# Entity type to human-readable token prefix mapping
+ENTITY_TOKEN_PREFIXES = {
+    "PERSON": ["FirstName", "LastName", "Name"],
+    "EMAIL_ADDRESS": ["Email"],
+    "PHONE_NUMBER": ["Phone"],
+    "CREDIT_CARD": ["CreditCard"],
+    "US_SSN": ["SSN"],
+    "IP_ADDRESS": ["IP"],
+    "URL": ["URL"],
+    "LOCATION": ["Location"],
+    "DATE_TIME": ["Date"],
+    "DOMAIN_NAME": ["Domain"],
+    "IBAN_CODE": ["IBAN"],
+    "US_BANK_NUMBER": ["BankAccount"],
+    "US_PASSPORT": ["Passport"],
+    "NRP": ["NRP"],
+    "MEDICAL_LICENSE": ["MedicalLicense"],
+}
+
+
+def split_person_name(text: str) -> List[Tuple[str, str]]:
+    """
+    Split a person's name into first name and last name components.
+    Returns list of (token_prefix, value) tuples.
+    """
+    parts = text.strip().split()
+    if len(parts) == 0:
+        return [("Name", text)]
+    elif len(parts) == 1:
+        return [("FirstName", parts[0])]
+    elif len(parts) == 2:
+        return [("FirstName", parts[0]), ("LastName", parts[1])]
+    else:
+        # More than 2 parts: first is first name, last is last name, middle parts are middle names
+        result = [("FirstName", parts[0])]
+        for i, part in enumerate(parts[1:-1], 1):
+            result.append((f"MiddleName", part))
+        result.append(("LastName", parts[-1]))
+        return result
+
+
+def tokenize_text(text: str, entities: List[dict]) -> dict:
+    """
+    Tokenize PII entities in text with human-readable tokens.
+
+    Example:
+        Input: "John Doe's email is john.doe@example.com"
+        Output: "[FirstName1] [LastName1]'s email is [Email1]"
+        Token map: {"FirstName1": "John", "LastName1": "Doe", "Email1": "john.doe@example.com"}
+    """
+    if not entities:
+        return {
+            "success": True,
+            "tokenized_text": text,
+            "token_map": {},
+        }
+
+    # Track token counters by prefix
+    token_counters: Dict[str, int] = defaultdict(int)
+
+    # Build token mappings
+    token_map: Dict[str, str] = {}
+
+    # Sort entities by start position (ascending) to process in order
+    # but we'll build replacements first, then apply from end to start
+    sorted_entities = sorted(entities, key=lambda x: x["start"])
+
+    # Build replacements list
+    replacements: List[Tuple[int, int, str]] = []
+
+    for entity in sorted_entities:
+        entity_type = entity["entity_type"]
+        original_value = entity["text"]
+        start = entity["start"]
+        end = entity["end"]
+
+        if entity_type == "PERSON":
+            # Split person names into first/last name tokens
+            name_parts = split_person_name(original_value)
+            token_parts = []
+
+            for prefix, value in name_parts:
+                token_counters[prefix] += 1
+                token_id = f"{prefix}{token_counters[prefix]}"
+                token_map[token_id] = value
+                token_parts.append(f"[{token_id}]")
+
+            replacement = " ".join(token_parts)
+            replacements.append((start, end, replacement))
+        else:
+            # Get the token prefix for this entity type
+            prefixes = ENTITY_TOKEN_PREFIXES.get(entity_type, [entity_type])
+            prefix = prefixes[0]
+
+            token_counters[prefix] += 1
+            token_id = f"{prefix}{token_counters[prefix]}"
+            token_map[token_id] = original_value
+
+            replacement = f"[{token_id}]"
+            replacements.append((start, end, replacement))
+
+    # Apply replacements from end to start (reverse order)
+    # This ensures positions remain valid as we replace
+    tokenized = text
+    for start, end, replacement in reversed(replacements):
+        tokenized = tokenized[:start] + replacement + tokenized[end:]
+
+    return {
+        "success": True,
+        "tokenized_text": tokenized,
+        "token_map": token_map,
+    }
+
+
+def detokenize_text(text: str, token_map: Dict[str, str]) -> dict:
+    """
+    De-tokenize text by replacing tokens with original values.
+
+    Example:
+        Input: "[FirstName1] [LastName1] is a great developer"
+        Token map: {"FirstName1": "John", "LastName1": "Doe"}
+        Output: "John Doe is a great developer"
+    """
+    if not token_map:
+        return {
+            "success": True,
+            "detokenized_text": text,
+        }
+
+    detokenized = text
+
+    # Find and replace all tokens in the text
+    # Token pattern: [TokenName1], [FirstName1], etc.
+    token_pattern = re.compile(r'\[([A-Za-z]+\d+)\]')
+
+    def replace_token(match):
+        token_id = match.group(1)
+        if token_id in token_map:
+            return token_map[token_id]
+        return match.group(0)  # Keep original if not found
+
+    detokenized = token_pattern.sub(replace_token, text)
+
+    return {
+        "success": True,
+        "detokenized_text": detokenized,
+    }
+
+
+def detect_tokens_in_text(text: str) -> List[str]:
+    """
+    Detect token patterns in text.
+    Returns list of token IDs found in the text.
+    """
+    token_pattern = re.compile(r'\[([A-Za-z]+\d+)\]')
+    matches = token_pattern.findall(text)
+    return matches
+
+
 def handle_request(
     request: dict,
     analyzer,
@@ -208,6 +377,66 @@ def handle_request(
         else:
             return analyze_text(analyzer, anonymizer, text)
 
+    elif action == "tokenize":
+        text = request.get("text", "")
+        entities = request.get("entities", [])
+
+        if not text:
+            return {"success": True, "tokenized_text": "", "token_map": {}}
+
+        return tokenize_text(text, entities)
+
+    elif action == "detokenize":
+        text = request.get("text", "")
+        token_map = request.get("token_map", {})
+
+        if not text:
+            return {"success": True, "detokenized_text": ""}
+
+        return detokenize_text(text, token_map)
+
+    elif action == "detect_tokens":
+        text = request.get("text", "")
+        tokens = detect_tokens_in_text(text)
+        return {
+            "success": True,
+            "tokens": tokens,
+            "has_tokens": len(tokens) > 0,
+        }
+
+    elif action == "analyze_and_tokenize":
+        # Combined action: analyze for PII and tokenize in one step
+        text = request.get("text", "")
+        if not text:
+            return {
+                "success": True,
+                "original_text": text,
+                "tokenized_text": "",
+                "token_map": {},
+                "entities": [],
+            }
+
+        # First analyze
+        if use_fallback or analyzer is None:
+            analysis = fallback_analyze(text)
+        else:
+            analysis = analyze_text(analyzer, anonymizer, text)
+
+        if not analysis.get("success"):
+            return analysis
+
+        # Then tokenize using the detected entities
+        entities = analysis.get("entities", [])
+        tokenization = tokenize_text(text, entities)
+
+        return {
+            "success": True,
+            "original_text": text,
+            "tokenized_text": tokenization.get("tokenized_text", text),
+            "token_map": tokenization.get("token_map", {}),
+            "entities": entities,
+        }
+
     elif action == "ping":
         return {"success": True, "message": "pong"}
 
@@ -215,7 +444,7 @@ def handle_request(
         return {
             "success": True,
             "presidio_available": analyzer is not None,
-            "version": "0.1.0",
+            "version": "0.2.0",
         }
 
     else:
