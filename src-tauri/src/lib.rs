@@ -68,9 +68,9 @@ fn set_tray_icon(app: &AppHandle, r: u8, g: u8, b: u8) {
     }
 }
 
-const TRAY_IDLE: (u8, u8, u8) = (34, 197, 94);    // green  #22c55e
+const TRAY_IDLE: (u8, u8, u8) = (34, 197, 94); // green  #22c55e
 const TRAY_WARNING: (u8, u8, u8) = (245, 158, 11); // orange #f59e0b
-const TRAY_DANGER: (u8, u8, u8) = (239, 68, 68);   // red    #ef4444
+const TRAY_DANGER: (u8, u8, u8) = (239, 68, 68); // red    #ef4444
 
 /// Returns true if the entity type is a secret/credential (vs personal PII).
 fn is_secret_entity(entity_type: &str) -> bool {
@@ -93,7 +93,10 @@ fn should_auto_anonymize(window_info: &window::WindowInfo, keywords: &[String]) 
     // Check app_name first if available
     if let Some(ref app_name) = window_info.app_name {
         let app_name_lower = app_name.to_lowercase();
-        if keywords.iter().any(|keyword| app_name_lower.contains(keyword)) {
+        if keywords
+            .iter()
+            .any(|keyword| app_name_lower.contains(keyword))
+        {
             return true;
         }
     }
@@ -175,7 +178,11 @@ impl HistoryEntry {
         tokenized: &str,
     ) -> Self {
         let preview = |s: &str| -> String {
-            if s.len() > 60 { format!("{}…", &s[..60]) } else { s.to_string() }
+            if s.len() > 60 {
+                format!("{}…", &s[..60])
+            } else {
+                s.to_string()
+            }
         };
         Self {
             timestamp: std::time::SystemTime::now()
@@ -209,7 +216,10 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self {
         let config = config::Config::load();
-        log::info!("Loaded config with {} keywords", config.get_all_keywords().len());
+        log::info!(
+            "Loaded config with {} keywords",
+            config.get_all_keywords().len()
+        );
 
         Self {
             sidecar: Arc::new(tokio::sync::Mutex::new(PresidioSidecar::new())),
@@ -271,7 +281,8 @@ fn try_tokenize_for_browser(
                     // Mark as handled AND update hash to prevent re-processing
                     {
                         let state = app_handle.state::<AppState>();
-                        let tokenized_hash = clipboard::hash_text(&tokenization_result.tokenized_text);
+                        let tokenized_hash =
+                            clipboard::hash_text(&tokenization_result.tokenized_text);
                         let mut last_hash = state.last_clipboard_hash.lock();
                         let mut handled = state.clipboard_handled.lock();
                         *last_hash = tokenized_hash;
@@ -487,7 +498,9 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
                                 );
                                 let mut hist = history.lock();
                                 hist.push(entry.clone());
-                                if hist.len() > 50 { hist.remove(0); }
+                                if hist.len() > 50 {
+                                    hist.remove(0);
+                                }
                                 let _ = app_handle_clone.emit("history-updated", &*hist);
                             }
 
@@ -520,7 +533,9 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
                                 (cfg.language.clone(), cfg.score_threshold)
                             };
                             let sidecar = sidecar.lock().await;
-                            sidecar.analyze_and_tokenize(&text, Some(&lang), Some(threshold)).await
+                            sidecar
+                                .analyze_and_tokenize(&text, Some(&lang), Some(threshold))
+                                .await
                         };
 
                         match result {
@@ -550,27 +565,39 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
                                         );
                                         let mut hist = history.lock();
                                         hist.push(entry);
-                                        if hist.len() > 50 { hist.remove(0); }
+                                        if hist.len() > 50 {
+                                            hist.remove(0);
+                                        }
                                         let _ = app_handle_clone.emit("history-updated", &*hist);
                                     }
 
                                     // Update tray icon: red for secrets, orange for PII
-                                    let has_secrets = tokenization.entities.iter()
+                                    let has_secrets = tokenization
+                                        .entities
+                                        .iter()
                                         .any(|e| is_secret_entity(&e.entity_type));
                                     if has_secrets {
                                         let (r, g, b) = TRAY_DANGER;
                                         set_tray_icon(&app_handle_clone, r, g, b);
-                                        if let Some(tray) = app_handle_clone.tray_by_id("pii-tray") {
-                                            let _ = tray.set_tooltip(Some("PII Shield — secrets detected!"));
+                                        if let Some(tray) = app_handle_clone.tray_by_id("pii-tray")
+                                        {
+                                            let _ = tray.set_tooltip(Some(
+                                                "PII Shield — secrets detected!",
+                                            ));
                                         }
                                     } else {
                                         let (r, g, b) = TRAY_WARNING;
                                         set_tray_icon(&app_handle_clone, r, g, b);
-                                        if let Some(tray) = app_handle_clone.tray_by_id("pii-tray") {
+                                        if let Some(tray) = app_handle_clone.tray_by_id("pii-tray")
+                                        {
                                             let _ = tray.set_tooltip(Some(&format!(
                                                 "PII Shield — {} PII item{} detected",
                                                 tokenization.entities.len(),
-                                                if tokenization.entities.len() == 1 { "" } else { "s" }
+                                                if tokenization.entities.len() == 1 {
+                                                    ""
+                                                } else {
+                                                    "s"
+                                                }
                                             )));
                                         }
                                     }
@@ -607,9 +634,11 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
                 };
                 let should_anonymize = should_auto_anonymize(&window_info, &keywords);
                 if should_anonymize {
-                    log::debug!("Auto-anonymize target detected: {} ({})",
+                    log::debug!(
+                        "Auto-anonymize target detected: {} ({})",
                         window_info.app_name.as_deref().unwrap_or("unknown"),
-                        window_info.title);
+                        window_info.title
+                    );
                 }
 
                 if should_anonymize {
@@ -628,13 +657,16 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
                         }
 
                         // Replace clipboard with tokenized text
-                        if let Err(e) = clipboard::set_clipboard_text(&tokenization_result.tokenized_text) {
+                        if let Err(e) =
+                            clipboard::set_clipboard_text(&tokenization_result.tokenized_text)
+                        {
                             log::error!("Failed to auto-tokenize clipboard: {}", e);
                         } else {
                             log::info!("Clipboard replaced with tokenized text");
 
                             // Mark as handled AND update hash to prevent re-processing
-                            let tokenized_hash = clipboard::hash_text(&tokenization_result.tokenized_text);
+                            let tokenized_hash =
+                                clipboard::hash_text(&tokenization_result.tokenized_text);
                             let mut last_hash = state.last_clipboard_hash.lock();
                             let mut handled = state.clipboard_handled.lock();
                             *last_hash = tokenized_hash;
@@ -731,10 +763,7 @@ async fn tokenize_and_copy(
 
 /// Manually de-tokenize text using the current vault
 #[tauri::command]
-async fn detokenize_text(
-    text: String,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
+async fn detokenize_text(text: String, state: State<'_, AppState>) -> Result<String, String> {
     let vault = state.token_vault.lock();
     let detokenized = detokenize_with_vault(&text, &vault);
     Ok(detokenized)
@@ -756,10 +785,7 @@ async fn get_config(state: State<'_, AppState>) -> Result<config::Config, String
 
 /// Save updated configuration to disk
 #[tauri::command]
-async fn save_config(
-    new_config: config::Config,
-    state: State<'_, AppState>,
-) -> Result<(), String> {
+async fn save_config(new_config: config::Config, state: State<'_, AppState>) -> Result<(), String> {
     new_config.save().map_err(|e| e.to_string())?;
     let mut config = state.config.lock();
     *config = new_config;

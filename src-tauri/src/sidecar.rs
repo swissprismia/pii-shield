@@ -384,7 +384,12 @@ impl PresidioSidecar {
 
     /// Analyze text for PII
     #[allow(dead_code)]
-    pub async fn analyze(&self, text: &str, language: Option<&str>, score_threshold: Option<f64>) -> Result<AnalysisResult, SidecarError> {
+    pub async fn analyze(
+        &self,
+        text: &str,
+        language: Option<&str>,
+        score_threshold: Option<f64>,
+    ) -> Result<AnalysisResult, SidecarError> {
         let request = SidecarRequest {
             action: "analyze".to_string(),
             text: Some(text.to_string()),
@@ -404,7 +409,12 @@ impl PresidioSidecar {
     }
 
     /// Analyze text for PII and tokenize it in one step
-    pub async fn analyze_and_tokenize(&self, text: &str, language: Option<&str>, score_threshold: Option<f64>) -> Result<TokenizationResult, SidecarError> {
+    pub async fn analyze_and_tokenize(
+        &self,
+        text: &str,
+        language: Option<&str>,
+        score_threshold: Option<f64>,
+    ) -> Result<TokenizationResult, SidecarError> {
         let request = SidecarRequest {
             action: "analyze_and_tokenize".to_string(),
             text: Some(text.to_string()),

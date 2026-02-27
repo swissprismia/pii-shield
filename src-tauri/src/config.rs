@@ -110,9 +110,7 @@ impl Config {
     /// Get the config file path
     fn get_config_path() -> PathBuf {
         // Try to use current directory first (development)
-        let dev_path = std::env::current_dir()
-            .ok()
-            .map(|p| p.join("config.json"));
+        let dev_path = std::env::current_dir().ok().map(|p| p.join("config.json"));
 
         if let Some(ref path) = dev_path {
             if path.exists() || std::env::current_dir().is_ok() {
@@ -144,8 +142,14 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert!(config.auto_anonymize.browsers.contains(&"chrome".to_string()));
-        assert!(config.auto_anonymize.ai_assistants.contains(&"chatgpt".to_string()));
+        assert!(config
+            .auto_anonymize
+            .browsers
+            .contains(&"chrome".to_string()));
+        assert!(config
+            .auto_anonymize
+            .ai_assistants
+            .contains(&"chatgpt".to_string()));
     }
 
     #[test]
