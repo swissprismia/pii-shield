@@ -12,11 +12,29 @@ pub struct AutoAnonymizeConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub auto_anonymize: AutoAnonymizeConfig,
+    /// Language code for PII detection (e.g. "en", "fr"). Default: "en".
+    #[serde(default = "Config::default_language")]
+    pub language: String,
+    /// Presidio confidence score threshold (0.0–1.0). Default: 0.5.
+    #[serde(default = "Config::default_score_threshold")]
+    pub score_threshold: f64,
+}
+
+impl Config {
+    fn default_language() -> String {
+        "en".to_string()
+    }
+
+    fn default_score_threshold() -> f64 {
+        0.5
+    }
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
+            language: "en".to_string(),
+            score_threshold: 0.5,
             auto_anonymize: AutoAnonymizeConfig {
                 browsers: vec![
                     "chrome".to_string(),

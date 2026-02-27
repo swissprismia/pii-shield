@@ -11,22 +11,38 @@
       <header class="header">
         <div class="logo">
           <svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="16" cy="16" r="14" stroke="currentColor" stroke-width="2" fill="none"/>
-            <path d="M16 8v8l5.5 3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-            <circle cx="16" cy="16" r="3" fill="currentColor"/>
+            <path d="M16 3L5 8v7c0 6.627 4.925 12.824 11 14 6.075-1.176 11-7.373 11-14V8L16 3z"
+              stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/>
+            <path d="M11 16l3.5 3.5L21 12" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           <h1>PII Shield</h1>
         </div>
         <div class="status" id="status">
           <span class="status-dot active"></span>
-          <span>Monitoring</span>
+          <span id="status-label">Monitoring</span>
         </div>
       </header>
 
-      <main class="main">
+      <!-- Tab Navigation -->
+      <nav class="tab-nav">
+        <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
+        <button class="tab-btn" data-tab="history">History</button>
+        <button class="tab-btn" data-tab="settings">Settings</button>
+      </nav>
+
+      <!-- ── Dashboard Tab ─────────────────────────────────────── -->
+      <main class="main tab-panel active" id="tab-dashboard">
+        <section class="section" id="loading-section">
+          <div class="loading-state">
+            <div class="spinner"></div>
+            <p>Starting PII engine…</p>
+          </div>
+        </section>
+
         <section class="section" id="detection-section" style="display: none;">
           <div class="detection-header">
-            <h2>PII Detected</h2>
+            <h2 id="detection-title">PII Detected</h2>
             <span class="badge" id="pii-count">0</span>
           </div>
           <div class="detection-list" id="detection-list">
@@ -44,7 +60,7 @@
             </div>
           </div>
           <div class="token-map-section" id="token-map-section" style="display: none;">
-            <h3>Token Mappings</h3>
+            <h3>Token Vault</h3>
             <div class="token-map-list" id="token-map-list">
               <!-- Token mappings will be inserted here -->
             </div>
@@ -52,19 +68,17 @@
           </div>
           <div class="actions">
             <button class="btn btn-secondary" id="btn-ignore">Ignore</button>
-            <button class="btn btn-primary" id="btn-tokenize">Tokenize & Copy</button>
+            <button class="btn btn-primary" id="btn-tokenize">Tokenize &amp; Copy</button>
           </div>
         </section>
 
         <section class="section" id="empty-section">
           <div class="empty-state">
             <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <rect x="8" y="12" width="48" height="40" rx="4" stroke="currentColor" stroke-width="2" fill="none"/>
-              <path d="M8 20h48" stroke="currentColor" stroke-width="2"/>
-              <circle cx="14" cy="16" r="2" fill="currentColor"/>
-              <circle cx="20" cy="16" r="2" fill="currentColor"/>
-              <circle cx="26" cy="16" r="2" fill="currentColor"/>
-              <path d="M16 32h32M16 40h24" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+              <path d="M32 6L10 16v14c0 13.255 9.85 25.648 22 28 12.15-2.352 22-14.745 22-28V16L32 6z"
+                stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/>
+              <path d="M22 32l7 7 13-14" stroke="currentColor" stroke-width="2"
+                stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
             <h2>Clipboard Monitoring Active</h2>
             <p>Copy text with PII to tokenize it before pasting to AI. Copy AI responses to automatically restore original values.</p>
@@ -92,6 +106,83 @@
             </div>
           </div>
         </section>
+      </main>
+
+      <!-- ── History Tab ────────────────────────────────────────── -->
+      <main class="main tab-panel" id="tab-history" style="display: none;">
+        <section class="section history-section">
+          <div class="section-header">
+            <h2>Session History</h2>
+            <button class="btn btn-small btn-secondary" id="btn-clear-history">Clear</button>
+          </div>
+          <p class="section-note">In-memory only — cleared on exit. Never written to disk.</p>
+          <div class="history-list" id="history-list">
+            <div class="empty-history">No activity yet this session.</div>
+          </div>
+        </section>
+      </main>
+
+      <!-- ── Settings Tab ──────────────────────────────────────── -->
+      <main class="main tab-panel" id="tab-settings" style="display: none;">
+        <section class="section settings-section">
+          <h2>Detection Settings</h2>
+
+          <div class="setting-row">
+            <label class="setting-label">
+              Language
+              <span class="setting-hint">Language model used for NLP analysis</span>
+            </label>
+            <select class="setting-select" id="setting-language">
+              <option value="en">English</option>
+              <option value="fr">French</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <label class="setting-label">
+              Confidence Threshold: <span id="threshold-display">0.50</span>
+              <span class="setting-hint">Lower = more detections, higher = fewer false positives</span>
+            </label>
+            <input type="range" class="setting-slider" id="setting-threshold"
+              min="0.3" max="0.9" step="0.05" value="0.5" />
+          </div>
+        </section>
+
+        <section class="section settings-section">
+          <h2>Monitored Apps</h2>
+
+          <div class="setting-group">
+            <h3 class="setting-group-title">Browsers</h3>
+            <div class="chip-list" id="browsers-list"></div>
+            <div class="chip-add-row">
+              <input type="text" class="chip-input" id="browsers-input" placeholder="Add browser keyword…" />
+              <button class="btn btn-small btn-primary" id="browsers-add">Add</button>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <h3 class="setting-group-title">AI Assistants</h3>
+            <div class="chip-list" id="ai-assistants-list"></div>
+            <div class="chip-add-row">
+              <input type="text" class="chip-input" id="ai-assistants-input" placeholder="Add AI app keyword…" />
+              <button class="btn btn-small btn-primary" id="ai-assistants-add">Add</button>
+            </div>
+          </div>
+
+          <div class="setting-group">
+            <h3 class="setting-group-title">Custom Apps</h3>
+            <div class="chip-list" id="custom-apps-list"></div>
+            <div class="chip-add-row">
+              <input type="text" class="chip-input" id="custom-apps-input" placeholder="Add custom app keyword…" />
+              <button class="btn btn-small btn-primary" id="custom-apps-add">Add</button>
+            </div>
+          </div>
+        </section>
+
+        <div class="settings-actions">
+          <button class="btn btn-secondary" id="btn-settings-reset">Reset Defaults</button>
+          <button class="btn btn-primary" id="btn-settings-save">Save Settings</button>
+        </div>
       </main>
 
       <footer class="footer">
