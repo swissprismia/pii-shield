@@ -199,13 +199,16 @@ jobs:
         working-directory: sidecar
         run: python build_sidecar.py
 
-      - name: Provide x86_64 sidecar for universal build
+      - name: Provide x86_64 and universal sidecar stubs for universal build
         run: |
           # build_sidecar.py produces only the native arch binary (aarch64 on M-series runners).
-          # Copy it to the x86_64 path so Tauri can assemble the universal binary in CI.
-          # The resulting DMG artifact is only functional on Apple Silicon.
+          # Copy it to the x86_64 and universal paths so Tauri can assemble the bundle in CI.
+          # The resulting DMG artifact is arm64-only; a true universal binary requires building
+          # on an x86_64 runner and merging with lipo.
           cp src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin \
              src-tauri/binaries/presidio-sidecar-x86_64-apple-darwin
+          cp src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin \
+             src-tauri/binaries/presidio-sidecar-universal-apple-darwin
 
       - name: Build Tauri app (universal binary)
         run: npm run tauri build -- --target universal-apple-darwin
