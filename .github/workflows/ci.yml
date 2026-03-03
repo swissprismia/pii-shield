@@ -16,7 +16,7 @@ jobs:
     name: Rust Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -70,7 +70,7 @@ jobs:
     name: Python Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -104,7 +104,7 @@ jobs:
     runs-on: windows-latest
     needs: [rust-check, python-check]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -160,7 +160,7 @@ jobs:
     runs-on: macos-latest
     needs: [rust-check, python-check]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable + macOS targets
         uses: dtolnay/rust-toolchain@stable
