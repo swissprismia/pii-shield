@@ -241,6 +241,7 @@ fn get_active_window_linux() -> Option<WindowInfo> {
 }
 
 /// Check if the active window is an AI assistant (ChatGPT, Claude, etc.)
+#[allow(dead_code)]
 pub fn is_ai_assistant_window(window_info: &WindowInfo) -> bool {
     let ai_indicators = [
         "chatgpt",

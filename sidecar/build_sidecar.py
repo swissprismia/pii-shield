@@ -20,25 +20,37 @@ import shutil
 from pathlib import Path
 
 
-def get_spacy_model_path():
-    """Get the path to the spaCy language model."""
-    try:
-        import spacy
-        nlp = spacy.load("fr_core_news_lg")
-        return Path(nlp._path)
-    except OSError:
-        # Try smaller models
-        for model in ["fr_core_news_md", "fr_core_news_sm"]:
-            try:
-                nlp = spacy.load(model)
-                print(f"Using spaCy model: {model}")
-                return Path(nlp._path)
-            except OSError:
-                continue
+def get_spacy_model_paths():
+    """Get paths to all available spaCy language models.
 
-        print("No spaCy model found. Please install one:")
-        print("  python -m spacy download fr_core_news_lg")
+    English models are required; French models are optional (bundled if installed).
+    Returns a list of (model_path, model_name) tuples for all found models.
+    """
+    import spacy
+
+    # English models are required (primary language)
+    english_models = ["en_core_web_lg", "en_core_web_md", "en_core_web_sm"]
+    # French models are optional (for multi-language support)
+    french_models = ["fr_core_news_lg", "fr_core_news_md", "fr_core_news_sm"]
+
+    found = []
+    for model_name in english_models + french_models:
+        try:
+            nlp = spacy.load(model_name)
+            model_path = Path(nlp._path)
+            found.append((model_path, model_name))
+            print(f"Found spaCy model: {model_name} ({model_path})")
+        except OSError:
+            pass
+
+    # Require at least one English model
+    has_english = any(name in english_models for _, name in found)
+    if not has_english:
+        print("No English spaCy model found. Please install one:")
+        print("  python -m spacy download en_core_web_lg")
         sys.exit(1)
+
+    return found
 
 
 def build_sidecar():
@@ -49,14 +61,8 @@ def build_sidecar():
     script_dir = Path(__file__).parent
     os.chdir(script_dir)
 
-    # Get spaCy model path
-    model_path = get_spacy_model_path()
-    model_name = model_path.name
-
-    # Determine output name based on platform
-    output_name = "presidio-sidecar"
-    if platform.system() == "Windows":
-        output_name = "presidio-sidecar.exe"
+    # Get all available spaCy model paths
+    model_entries = get_spacy_model_paths()
 
     # PyInstaller command
     cmd = [
@@ -64,13 +70,18 @@ def build_sidecar():
         "--onefile",
         "--name", "presidio-sidecar",
         "--clean",
-        # Add spaCy model as data
-        "--add-data", f"{model_path}{os.pathsep}{model_name}",
+    ]
+
+    # Add all available spaCy models as data
+    for model_path, model_name in model_entries:
+        cmd += ["--add-data", f"{model_path}{os.pathsep}{model_name}"]
+
+    cmd += [
         # Hidden imports for Presidio and spaCy
         "--hidden-import", "presidio_analyzer",
         "--hidden-import", "presidio_anonymizer",
         "--hidden-import", "spacy",
-        "--hidden-import", f"spacy.lang.en",
+        "--hidden-import", "spacy.lang.en",
         "--hidden-import", "thinc",
         "--hidden-import", "thinc.backends.numpy_ops",
         "--hidden-import", "cymem",

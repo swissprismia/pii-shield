@@ -3,10 +3,12 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 /// Clipboard watcher that monitors for changes
+#[allow(dead_code)]
 pub struct ClipboardWatcher {
     last_content_hash: u64,
 }
 
+#[allow(dead_code)]
 impl ClipboardWatcher {
     pub fn new() -> Self {
         Self {

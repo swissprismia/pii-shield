@@ -31,6 +31,7 @@ pub struct PiiEntity {
 }
 
 /// Analysis result from Presidio sidecar
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisResult {
     pub original_text: String,
@@ -48,6 +49,7 @@ pub struct TokenizationResult {
 }
 
 /// De-tokenization result
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetokenizationResult {
     pub tokenized_text: String,
@@ -64,6 +66,10 @@ struct SidecarRequest {
     entities: Option<Vec<PiiEntity>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     token_map: Option<std::collections::HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    score_threshold: Option<f64>,
 }
 
 /// Response from the sidecar
@@ -127,7 +133,7 @@ impl PresidioSidecar {
         log::info!("Starting Presidio sidecar...");
 
         // Try to find the sidecar binary in various locations
-        let sidecar_paths = vec![
+        let sidecar_paths = [
             // Development path - Python script (from src-tauri, go up one level to project root)
             std::env::current_dir()
                 .unwrap_or_default()
@@ -238,6 +244,7 @@ impl PresidioSidecar {
     }
 
     /// Start mock sidecar for development when Presidio isn't available
+    #[allow(dead_code)]
     async fn start_mock_sidecar(&mut self) -> Result<(), SidecarError> {
         log::warn!("Using mock sidecar - PII detection will be simulated");
 
@@ -376,12 +383,20 @@ impl PresidioSidecar {
     }
 
     /// Analyze text for PII
-    pub async fn analyze(&self, text: &str) -> Result<AnalysisResult, SidecarError> {
+    #[allow(dead_code)]
+    pub async fn analyze(
+        &self,
+        text: &str,
+        language: Option<&str>,
+        score_threshold: Option<f64>,
+    ) -> Result<AnalysisResult, SidecarError> {
         let request = SidecarRequest {
             action: "analyze".to_string(),
             text: Some(text.to_string()),
             entities: None,
             token_map: None,
+            language: language.map(|s| s.to_string()),
+            score_threshold,
         };
 
         let response = self.send_request(request).await?;
@@ -394,12 +409,19 @@ impl PresidioSidecar {
     }
 
     /// Analyze text for PII and tokenize it in one step
-    pub async fn analyze_and_tokenize(&self, text: &str) -> Result<TokenizationResult, SidecarError> {
+    pub async fn analyze_and_tokenize(
+        &self,
+        text: &str,
+        language: Option<&str>,
+        score_threshold: Option<f64>,
+    ) -> Result<TokenizationResult, SidecarError> {
         let request = SidecarRequest {
             action: "analyze_and_tokenize".to_string(),
             text: Some(text.to_string()),
             entities: None,
             token_map: None,
+            language: language.map(|s| s.to_string()),
+            score_threshold,
         };
 
         let response = self.send_request(request).await?;
@@ -413,6 +435,7 @@ impl PresidioSidecar {
     }
 
     /// De-tokenize text by replacing tokens with original values
+    #[allow(dead_code)]
     pub async fn detokenize(
         &self,
         text: &str,
@@ -423,6 +446,8 @@ impl PresidioSidecar {
             text: Some(text.to_string()),
             entities: None,
             token_map: Some(token_map),
+            language: None,
+            score_threshold: None,
         };
 
         let response = self.send_request(request).await?;
@@ -434,12 +459,15 @@ impl PresidioSidecar {
     }
 
     /// Detect if text contains tokens
+    #[allow(dead_code)]
     pub async fn detect_tokens(&self, text: &str) -> Result<(bool, Vec<String>), SidecarError> {
         let request = SidecarRequest {
             action: "detect_tokens".to_string(),
             text: Some(text.to_string()),
             entities: None,
             token_map: None,
+            language: None,
+            score_threshold: None,
         };
 
         let response = self.send_request(request).await?;
@@ -448,6 +476,7 @@ impl PresidioSidecar {
     }
 
     /// Mock analysis using simple pattern matching
+    #[allow(dead_code)]
     fn mock_analyze(&self, text: &str) -> Result<AnalysisResult, SidecarError> {
         let mut entities = Vec::new();
         let mut anonymized = text.to_string();

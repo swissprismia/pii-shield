@@ -25,8 +25,142 @@ import json
 import sys
 import signal
 import re
-from typing import Optional, Dict, List, Tuple
+from typing import Dict, List, Tuple
 from collections import defaultdict
+
+
+class SecretsRecognizer:
+    """
+    Regex-based recognizer for developer secrets and credentials.
+
+    Detects: OpenAI/Anthropic API keys, AWS Access Keys, GitHub tokens,
+    JWT tokens, PEM private keys, and generic long API keys.
+    """
+
+    # Secret patterns: (name, regex, score)
+    PATTERNS = [
+        ("OPENAI_API_KEY", r"sk-(?:proj-)?[A-Za-z0-9\-_]{20,}", 0.97),
+        ("ANTHROPIC_API_KEY", r"sk-ant-[A-Za-z0-9\-_]{20,}", 0.97),
+        ("AWS_ACCESS_KEY", r"\bAKIA[0-9A-Z]{16}\b", 0.97),
+        ("GITHUB_TOKEN", r"(?:ghp|ghs|gho|ghu|ghr|github_pat)_[A-Za-z0-9_]{20,}", 0.97),
+        ("JWT_TOKEN", r"ey[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+", 0.90),
+        ("PRIVATE_KEY", r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----[\s\S]+?-----END (?:[A-Z ]+ )?PRIVATE KEY-----", 0.99),
+        # Generic long alphanumeric key (32+ chars, high entropy heuristic)
+        ("API_KEY", r"\b[A-Za-z0-9\-_]{32,64}\b", 0.60),
+    ]
+
+    @staticmethod
+    def create_recognizers():
+        """Create and return a list of PatternRecognizers for secrets."""
+        recognizers = []
+        try:
+            from presidio_analyzer import Pattern, PatternRecognizer
+
+            for entity_type, regex, score in SecretsRecognizer.PATTERNS:
+                pattern = Pattern(
+                    name=f"{entity_type.lower()}_pattern",
+                    regex=regex,
+                    score=score,
+                )
+                recognizer = PatternRecognizer(
+                    supported_entity=entity_type,
+                    patterns=[pattern],
+                )
+                recognizers.append(recognizer)
+
+        except ImportError:
+            pass
+
+        return recognizers
+
+
+class SwissAvsRecognizer:
+    """
+    Custom recognizer for Swiss AVS/AHV social security numbers.
+
+    Format: 756.XXXX.XXXX.XX (13 digits, 756 is Swiss country code)
+    The last 2 digits are check digits using EAN-13 algorithm.
+    Can appear with or without dots/spaces.
+    """
+
+    @staticmethod
+    def validate_ean13_check_digit(avs_number: str) -> bool:
+        """
+        Validate the EAN-13 check digit for Swiss AVS number.
+
+        Args:
+            avs_number: 13-digit AVS number string
+
+        Returns:
+            True if check digit is valid, False otherwise
+        """
+        if len(avs_number) != 13 or not avs_number.isdigit():
+            return False
+
+        # EAN-13 algorithm: sum of (odd position * 1 + even position * 3)
+        # Check digit makes the sum divisible by 10
+        digits = [int(d) for d in avs_number]
+
+        # Calculate sum for first 12 digits
+        total = sum(digits[i] if i % 2 == 0 else digits[i] * 3 for i in range(12))
+
+        # Check digit should make total % 10 == 0
+        expected_check = (10 - (total % 10)) % 10
+
+        return digits[12] == expected_check
+
+    @staticmethod
+    def create_recognizer():
+        """
+        Create and return a PatternRecognizer for Swiss AVS numbers.
+        """
+        try:
+            from presidio_analyzer import Pattern, PatternRecognizer
+
+            # Pattern matches: 756.XXXX.XXXX.XX or 756 XXXX XXXX XX or 7567538528404
+            avs_pattern = Pattern(
+                name="swiss_avs_pattern",
+                regex=r"\b756[\.\s]?\d{4}[\.\s]?\d{4}[\.\s]?\d{2}\b",
+                score=0.85,
+            )
+
+            avs_recognizer = PatternRecognizer(
+                supported_entity="SWISS_AVS_NUMBER",
+                patterns=[avs_pattern],
+                context=["AVS", "AHV", "social security", "swiss", "switzerland", "numéro"],
+            )
+
+            # Add custom validation
+            original_analyze = avs_recognizer.analyze
+
+            def analyze_with_validation(text, entities, nlp_artifacts=None):
+                """Wrapper that validates check digit."""
+                results = original_analyze(text, entities, nlp_artifacts)
+
+                validated_results = []
+                for result in results:
+                    # Extract the matched text and remove dots/spaces
+                    matched_text = text[result.start:result.end]
+                    digits_only = re.sub(r'[\.\s]', '', matched_text)
+
+                    # Validate check digit
+                    if SwissAvsRecognizer.validate_ean13_check_digit(digits_only):
+                        # Increase score for valid check digit
+                        result.score = 0.95
+                        validated_results.append(result)
+                    elif len(digits_only) == 13 and digits_only.startswith('756'):
+                        # Still include even if check digit fails, but with lower score
+                        result.score = 0.70
+                        validated_results.append(result)
+
+                return validated_results
+
+            avs_recognizer.analyze = analyze_with_validation
+
+            return avs_recognizer
+
+        except ImportError:
+            return None
 
 
 def setup_presidio():
@@ -34,10 +168,20 @@ def setup_presidio():
     try:
         from presidio_analyzer import AnalyzerEngine
         from presidio_anonymizer import AnonymizerEngine
-        from presidio_anonymizer.entities import OperatorConfig
 
         # Initialize the analyzer with default NLP engine (spaCy)
         analyzer = AnalyzerEngine()
+
+        # Add custom Swiss AVS recognizer
+        avs_recognizer = SwissAvsRecognizer.create_recognizer()
+        if avs_recognizer:
+            analyzer.registry.add_recognizer(avs_recognizer)
+            log_info("Swiss AVS recognizer registered successfully")
+
+        # Add secrets recognizers
+        for secret_recognizer in SecretsRecognizer.create_recognizers():
+            analyzer.registry.add_recognizer(secret_recognizer)
+        log_info("Secrets recognizers registered successfully")
 
         # Initialize the anonymizer
         anonymizer = AnonymizerEngine()
@@ -59,7 +203,7 @@ def log_info(message: str):
 
 
 def analyze_text(
-    analyzer, anonymizer, text: str, language: str = "en"
+    analyzer, anonymizer, text: str, language: str = "en", score_threshold: float = 0.5
 ) -> dict:
     """
     Analyze text for PII and return anonymized version.
@@ -79,7 +223,7 @@ def analyze_text(
             text=text,
             language=language,
             entities=None,  # Use all supported entities
-            score_threshold=0.5,  # Confidence threshold
+            score_threshold=score_threshold,
         )
 
         if not results:
@@ -145,6 +289,10 @@ def fallback_analyze(text: str) -> dict:
             r"\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b",
             "[SSN]"
         ),
+        "SWISS_AVS_NUMBER": (
+            r"\b756[\.\s]?\d{4}[\.\s]?\d{4}[\.\s]?\d{2}\b",
+            "[AVS]"
+        ),
         "IP_ADDRESS": (
             r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b",
             "[IP_ADDRESS]"
@@ -152,6 +300,26 @@ def fallback_analyze(text: str) -> dict:
         "URL": (
             r"https?://[^\s<>\"{}|\\^`\[\]]+",
             "[URL]"
+        ),
+        "OPENAI_API_KEY": (
+            r"sk-(?:proj-)?[A-Za-z0-9\-_]{20,}",
+            "[OpenAIKey1]"
+        ),
+        "ANTHROPIC_API_KEY": (
+            r"sk-ant-[A-Za-z0-9\-_]{20,}",
+            "[AnthropicKey1]"
+        ),
+        "AWS_ACCESS_KEY": (
+            r"\bAKIA[0-9A-Z]{16}\b",
+            "[AWSKey1]"
+        ),
+        "GITHUB_TOKEN": (
+            r"(?:ghp|ghs|gho|ghu|ghr|github_pat)_[A-Za-z0-9_]{20,}",
+            "[GitHubToken1]"
+        ),
+        "JWT_TOKEN": (
+            r"ey[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+",
+            "[JWT1]"
         ),
     }
 
@@ -216,6 +384,15 @@ ENTITY_TOKEN_PREFIXES = {
     "US_PASSPORT": ["Passport"],
     "NRP": ["NRP"],
     "MEDICAL_LICENSE": ["MedicalLicense"],
+    "SWISS_AVS_NUMBER": ["AVS"],
+    # Secrets & credentials
+    "API_KEY": ["APIKey"],
+    "OPENAI_API_KEY": ["OpenAIKey"],
+    "ANTHROPIC_API_KEY": ["AnthropicKey"],
+    "AWS_ACCESS_KEY": ["AWSKey"],
+    "GITHUB_TOKEN": ["GitHubToken"],
+    "JWT_TOKEN": ["JWT"],
+    "PRIVATE_KEY": ["PrivKey"],
 }
 
 
@@ -235,7 +412,7 @@ def split_person_name(text: str) -> List[Tuple[str, str]]:
         # More than 2 parts: first is first name, last is last name, middle parts are middle names
         result = [("FirstName", parts[0])]
         for i, part in enumerate(parts[1:-1], 1):
-            result.append((f"MiddleName", part))
+            result.append(("MiddleName", part))
         result.append(("LastName", parts[-1]))
         return result
 
@@ -369,13 +546,15 @@ def handle_request(
 
     if action == "analyze":
         text = request.get("text", "")
+        language = request.get("language", "en")
+        score_threshold = request.get("score_threshold", 0.5)
         if not text:
             return {"success": True, "anonymized_text": "", "entities": []}
 
         if use_fallback or analyzer is None:
             return fallback_analyze(text)
         else:
-            return analyze_text(analyzer, anonymizer, text)
+            return analyze_text(analyzer, anonymizer, text, language=language, score_threshold=score_threshold)
 
     elif action == "tokenize":
         text = request.get("text", "")
@@ -407,6 +586,8 @@ def handle_request(
     elif action == "analyze_and_tokenize":
         # Combined action: analyze for PII and tokenize in one step
         text = request.get("text", "")
+        language = request.get("language", "en")
+        score_threshold = request.get("score_threshold", 0.5)
         if not text:
             return {
                 "success": True,
@@ -420,7 +601,7 @@ def handle_request(
         if use_fallback or analyzer is None:
             analysis = fallback_analyze(text)
         else:
-            analysis = analyze_text(analyzer, anonymizer, text)
+            analysis = analyze_text(analyzer, anonymizer, text, language=language, score_threshold=score_threshold)
 
         if not analysis.get("success"):
             return analysis

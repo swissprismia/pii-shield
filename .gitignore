@@ -49,57 +49,11 @@ tmp/
 temp/
 *.tmp
 
-
 # Tauri
 src-tauri/binaries
 
-# Dependencies
-node_modules/
-.pnpm-store/
+# Runtime config (auto-created, may contain sensitive app list customizations)
+config.json
 
-# Build outputs
-dist/
-target/
-*.pyc
-__pycache__/
-*.egg-info/
-build/
-
-# Python virtual environment
-venv/
-.venv/
-env/
-
-# PyInstaller
-*.spec
-sidecar/dist/
-sidecar/build/
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-*~
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Logs
-*.log
-npm-debug.log*
-
-# Test coverage
-coverage/
-.nyc_output/
-
-# Temporary files
-tmp/
-temp/
-*.tmp
+# Test scripts not meant for the repo
+test_avs.py

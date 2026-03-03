@@ -8,7 +8,13 @@
       "Bash(dir \"C:\\_git\\poc\\app-presidio\\src-tauri\\gen\")",
       "Bash(dir \"C:\\_git\\poc\\app-presidio\\src-tauri\\binaries\")",
       "Bash(dir \"C:\\_git\\poc\\app-presidio\")",
-      "Bash(dir \"C:\\_git\\poc\\app-presidio\\sidecar\")"
+      "Bash(dir \"C:\\_git\\poc\\app-presidio\\sidecar\")",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(python:*)",
+      "Bash(ruff check:*)",
+      "Bash(gh run:*)",
+      "Bash(cargo fmt:*)"
     ],
     "deny": [],
     "ask": []
