@@ -34,7 +34,7 @@ regex = "1.12"
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = "0.9"
+core-foundation = "0.10"
 core-graphics = "0.23"
 
 [target.'cfg(target_os = "linux")'.dependencies]
