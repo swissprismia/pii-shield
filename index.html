@@ -28,6 +28,7 @@
       <nav class="tab-nav">
         <button class="tab-btn active" data-tab="dashboard">Dashboard</button>
         <button class="tab-btn" data-tab="history">History</button>
+        <button class="tab-btn" data-tab="vault">Vault</button>
         <button class="tab-btn" data-tab="settings">Settings</button>
       </nav>
 
@@ -60,11 +61,11 @@
             </div>
           </div>
           <div class="token-map-section" id="token-map-section" style="display: none;">
-            <h3>Token Vault</h3>
-            <div class="token-map-list" id="token-map-list">
-              <!-- Token mappings will be inserted here -->
+            <div class="token-map-header">
+              <h3>Token Vault</h3>
+              <button class="btn btn-small btn-secondary" id="btn-view-vault">View in Vault →</button>
             </div>
-            <button class="btn btn-small btn-secondary" id="btn-clear-vault">Clear Vault</button>
+            <p class="token-map-summary" id="token-map-summary"></p>
           </div>
           <div class="actions">
             <button class="btn btn-secondary" id="btn-ignore">Ignore</button>
@@ -118,6 +119,39 @@
           <p class="section-note">In-memory only — cleared on exit. Never written to disk.</p>
           <div class="history-list" id="history-list">
             <div class="empty-history">No activity yet this session.</div>
+          </div>
+        </section>
+      </main>
+
+      <!-- ── Vault Tab ──────────────────────────────────────────── -->
+      <main class="main tab-panel" id="tab-vault" style="display: none;">
+        <section class="section vault-section">
+          <div class="section-header">
+            <div class="vault-header-left">
+              <h2>Token Vault</h2>
+              <span class="vault-count" id="vault-count">empty</span>
+            </div>
+            <button class="btn btn-small btn-danger" id="btn-vault-clear-all" style="display: none;">
+              Clear All
+            </button>
+          </div>
+          <p class="section-note">In-memory only — cleared on exit. Never written to disk.</p>
+
+          <div class="vault-preview" id="vault-preview" style="display: none;">
+            <div class="vault-preview-row">
+              <span class="preview-label">Original</span>
+              <pre class="preview-text vault-preview-text" id="vault-original-text"></pre>
+            </div>
+            <div class="vault-preview-row">
+              <span class="preview-label">Tokenized</span>
+              <pre class="preview-text tokenized vault-preview-text" id="vault-tokenized-text"></pre>
+            </div>
+          </div>
+
+          <div class="vault-list" id="vault-list"></div>
+
+          <div class="vault-empty" id="vault-empty">
+            <p>No tokens in vault. Copy text containing PII to populate the vault.</p>
           </div>
         </section>
       </main>
