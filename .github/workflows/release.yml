@@ -109,6 +109,11 @@ jobs:
         working-directory: sidecar
         run: python build_sidecar.py
 
+      - name: Copy sidecar for x86_64 (Rosetta 2 compatibility)
+        run: |
+          cp src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin \
+             src-tauri/binaries/presidio-sidecar-x86_64-apple-darwin
+
       - name: Build Tauri app (universal)
         run: npm run tauri build -- --target universal-apple-darwin
         env:
