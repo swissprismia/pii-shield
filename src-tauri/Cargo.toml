@@ -28,6 +28,7 @@ log = "0.4"
 env_logger = "0.11"
 thiserror = "1.0"
 regex = "1.12"
+time = "0.3.47" # force minimum version to fix RUSTSEC-2026-0009
 
 # Platform-specific dependencies for active window detection
 [target.'cfg(target_os = "windows")'.dependencies]
