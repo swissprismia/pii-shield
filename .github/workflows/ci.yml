@@ -16,7 +16,7 @@ jobs:
     name: Rust Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -70,7 +70,7 @@ jobs:
     name: Python Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -104,7 +104,7 @@ jobs:
     runs-on: windows-latest
     needs: [rust-check, python-check]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -115,7 +115,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "npm"
@@ -148,7 +148,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload Windows installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pii-shield-windows
           path: src-tauri/target/release/bundle/nsis/*.exe
@@ -160,7 +160,7 @@ jobs:
     runs-on: macos-latest
     needs: [rust-check, python-check]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust stable + macOS targets
         uses: dtolnay/rust-toolchain@stable
@@ -173,7 +173,7 @@ jobs:
           workspaces: src-tauri
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "20"
           cache: "npm"
@@ -199,6 +199,17 @@ jobs:
         working-directory: sidecar
         run: python build_sidecar.py
 
+      - name: Provide x86_64 and universal sidecar stubs for universal build
+        run: |
+          # build_sidecar.py produces only the native arch binary (aarch64 on M-series runners).
+          # Copy it to the x86_64 and universal paths so Tauri can assemble the bundle in CI.
+          # The resulting DMG artifact is arm64-only; a true universal binary requires building
+          # on an x86_64 runner and merging with lipo.
+          cp src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin \
+             src-tauri/binaries/presidio-sidecar-x86_64-apple-darwin
+          cp src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin \
+             src-tauri/binaries/presidio-sidecar-universal-apple-darwin
+
       - name: Build Tauri app (universal binary)
         run: npm run tauri build -- --target universal-apple-darwin
         env:
@@ -206,7 +217,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload macOS DMG artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pii-shield-macos
           path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg

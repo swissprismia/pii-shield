@@ -32,11 +32,19 @@ const elements = {
   originalText: document.getElementById('original-text'),
   tokenizedText: document.getElementById('tokenized-text'),
   tokenMapSection: document.getElementById('token-map-section'),
-  tokenMapList: document.getElementById('token-map-list'),
+  vaultTokenMapSummary: document.getElementById('token-map-summary'),
+  btnViewVault: document.getElementById('btn-view-vault'),
   piiCount: document.getElementById('pii-count'),
   btnTokenize: document.getElementById('btn-tokenize'),
   btnIgnore: document.getElementById('btn-ignore'),
-  btnClearVault: document.getElementById('btn-clear-vault'),
+  // Vault tab
+  vaultList: document.getElementById('vault-list'),
+  vaultEmpty: document.getElementById('vault-empty'),
+  vaultCount: document.getElementById('vault-count'),
+  vaultClearAll: document.getElementById('btn-vault-clear-all'),
+  vaultPreview: document.getElementById('vault-preview'),
+  vaultOriginalText: document.getElementById('vault-original-text'),
+  vaultTokenizedText: document.getElementById('vault-tokenized-text'),
   // Stats
   statScanned: document.getElementById('stat-scanned'),
   statDetected: document.getElementById('stat-detected'),
@@ -153,6 +161,29 @@ const entityConfig = {
   PRIVATE_KEY:      { label: 'Private Key',      color: '#991b1b', secret: true },
 };
 
+// ── Token Prefix → Entity Type mapping ───────────────────────────────────────
+
+const TOKEN_PREFIX_TO_ENTITY_TYPE = {
+  // PII
+  FirstName: 'PERSON', LastName: 'PERSON', Name: 'PERSON', MiddleName: 'PERSON',
+  Email: 'EMAIL_ADDRESS', Phone: 'PHONE_NUMBER', CreditCard: 'CREDIT_CARD',
+  SSN: 'US_SSN', IP: 'IP_ADDRESS', URL: 'URL', Location: 'LOCATION',
+  Date: 'DATE_TIME', Domain: 'DOMAIN_NAME', IBAN: 'IBAN_CODE',
+  BankAccount: 'US_BANK_NUMBER', Passport: 'US_PASSPORT', NRP: 'NRP',
+  MedicalLicense: 'MEDICAL_LICENSE', AVS: 'SWISS_AVS_NUMBER',
+  // Secrets
+  APIKey: 'API_KEY', OpenAIKey: 'OPENAI_API_KEY', AnthropicKey: 'ANTHROPIC_API_KEY',
+  AWSKey: 'AWS_ACCESS_KEY', GitHubToken: 'GITHUB_TOKEN', JWT: 'JWT_TOKEN',
+  PrivKey: 'PRIVATE_KEY',
+};
+
+function getTokenEntityConfig(tokenId) {
+  const base = tokenId.replace(/\d+$/, ''); // strip trailing digits
+  const entityType = TOKEN_PREFIX_TO_ENTITY_TYPE[base];
+  if (entityType && entityConfig[entityType]) return entityConfig[entityType];
+  return { label: base, color: '#666', secret: false };
+}
+
 // ── Tab Navigation ────────────────────────────────────────────────────────────
 
 function initTabs() {
@@ -171,6 +202,8 @@ function initTabs() {
         renderSettings();
       } else if (tab === 'history') {
         renderHistory();
+      } else if (tab === 'vault') {
+        renderVault();
       }
     });
   });
@@ -220,34 +253,21 @@ function updateDashboard() {
     elements.originalText.textContent = state.originalText;
     elements.tokenizedText.textContent = state.tokenizedText;
 
-    if (Object.keys(state.tokenMap).length > 0) {
-      elements.tokenMapSection.style.display = 'block';
-      elements.tokenMapList.innerHTML = Object.entries(state.tokenMap)
-        .map(([token, value]) => {
-          const truncated = value.length > 20 ? value.substring(0, 20) + '…' : value;
-          return `
-            <div class="token-mapping">
-              <span class="token-id">[${escapeHtml(token)}]</span>
-              <span class="token-arrow">→</span>
-              <span class="token-value">${escapeHtml(truncated)}</span>
-              <button class="token-copy-btn" data-value="${escapeHtml(value)}" title="Copy original value">⎘</button>
-            </div>
-          `;
-        })
-        .join('');
-      // Wire copy buttons
-      elements.tokenMapList.querySelectorAll('.token-copy-btn').forEach((btn) => {
-        btn.addEventListener('click', async () => {
-          await writeText(btn.dataset.value);
-          showToast('Copied', 'Original value copied to clipboard', 'info', 2000);
-        });
-      });
-    } else {
-      elements.tokenMapSection.style.display = 'none';
-    }
+    updateDashboardVaultSummary();
   } else {
     elements.detectionSection.style.display = 'none';
     elements.emptySection.style.display = 'block';
+    elements.tokenMapSection.style.display = 'none';
+  }
+}
+
+function updateDashboardVaultSummary() {
+  const count = Object.keys(state.tokenMap).length;
+  if (count > 0) {
+    elements.tokenMapSection.style.display = 'block';
+    elements.vaultTokenMapSummary.textContent =
+      `${count} token${count !== 1 ? 's' : ''} stored in vault`;
+  } else {
     elements.tokenMapSection.style.display = 'none';
   }
 }
@@ -288,6 +308,83 @@ function renderHistory() {
       `;
     })
     .join('');
+}
+
+// ── Vault Tab ─────────────────────────────────────────────────────────────────
+
+function renderVault() {
+  const entries = Object.entries(state.tokenMap);
+  const count = entries.length;
+
+  // Update count badge
+  elements.vaultCount.textContent = count === 0 ? 'empty' : `${count} token${count !== 1 ? 's' : ''}`;
+
+  // Show/hide Clear All button
+  elements.vaultClearAll.style.display = count > 0 ? 'block' : 'none';
+
+  // Show/hide text preview
+  if (count > 0 && (state.originalText || state.tokenizedText)) {
+    elements.vaultPreview.style.display = 'block';
+    elements.vaultOriginalText.textContent = state.originalText;
+    elements.vaultTokenizedText.textContent = state.tokenizedText;
+  } else {
+    elements.vaultPreview.style.display = 'none';
+  }
+
+  // Show/hide empty state
+  elements.vaultEmpty.style.display = count === 0 ? 'block' : 'none';
+  elements.vaultList.style.display = count === 0 ? 'none' : 'flex';
+
+  if (count === 0) {
+    elements.vaultList.innerHTML = '';
+    return;
+  }
+
+  elements.vaultList.innerHTML = entries
+    .map(([tokenId, value]) => {
+      const cfg = getTokenEntityConfig(tokenId);
+      const secretClass = cfg.secret ? ' vault-entry--secret' : '';
+      const badgeClass = cfg.secret ? ' vault-badge--danger' : '';
+      return `
+        <div class="vault-entry${secretClass}" data-token-id="${escapeHtml(tokenId)}">
+          <span class="vault-badge${badgeClass}" style="background: ${cfg.color}22; color: ${cfg.color}; border-color: ${cfg.color}44">${escapeHtml(cfg.label)}</span>
+          <div class="vault-entry-body">
+            <span class="vault-token-id">[${escapeHtml(tokenId)}]</span>
+            <span class="vault-token-value">${escapeHtml(value)}</span>
+          </div>
+          <div class="vault-entry-actions">
+            <button class="btn btn-small btn-secondary vault-copy-btn" data-value="${escapeHtml(value)}" title="Copy original value">⎘</button>
+            <button class="vault-delete-btn" data-token-id="${escapeHtml(tokenId)}" title="Delete token">🗑</button>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  // Wire copy buttons
+  elements.vaultList.querySelectorAll('.vault-copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      await writeText(btn.dataset.value);
+      showToast('Copied', 'Original value copied to clipboard', 'info', 2000);
+    });
+  });
+
+  // Wire delete buttons
+  elements.vaultList.querySelectorAll('.vault-delete-btn').forEach((btn) => {
+    btn.addEventListener('click', () => handleDeleteToken(btn.dataset.tokenId));
+  });
+}
+
+async function handleDeleteToken(tokenId) {
+  try {
+    await invoke('delete_token', { tokenId });
+    delete state.tokenMap[tokenId];
+    renderVault();
+    updateDashboardVaultSummary();
+    showToast('Token Deleted', `[${tokenId}] removed from vault`, 'info', 2000);
+  } catch (err) {
+    showToast('Error', `Failed to delete token: ${err}`, 'error');
+  }
 }
 
 // ── Settings Tab ──────────────────────────────────────────────────────────────
@@ -412,8 +509,9 @@ async function handleIgnore() {
   updateDashboard();
   try {
     await invoke('mark_clipboard_handled');
+    await invoke('clear_token_vault');
   } catch (error) {
-    console.error('Failed to mark clipboard as handled:', error);
+    console.error('Failed to handle ignore:', error);
   }
 }
 
@@ -421,6 +519,8 @@ async function handleClearVault() {
   try {
     await invoke('clear_token_vault');
     state.tokenMap = {};
+    renderVault();
+    updateDashboardVaultSummary();
     showToast('Vault Cleared', 'Token mappings have been cleared', 'info');
   } catch (error) {
     showToast('Error', 'Failed to clear token vault', 'error');
@@ -514,8 +614,11 @@ async function init() {
 
   elements.btnTokenize?.addEventListener('click', handleTokenize);
   elements.btnIgnore?.addEventListener('click', handleIgnore);
-  elements.btnClearVault?.addEventListener('click', handleClearVault);
   elements.btnClearHistory?.addEventListener('click', handleClearHistory);
+  elements.vaultClearAll?.addEventListener('click', handleClearVault);
+  elements.btnViewVault?.addEventListener('click', () => {
+    document.querySelector('[data-tab="vault"]').click();
+  });
 
   await initTauriListeners();
 

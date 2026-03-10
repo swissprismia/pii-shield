@@ -733,6 +733,18 @@ async fn clear_token_vault(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Delete a single token from the vault by its ID
+#[tauri::command]
+async fn delete_token(token_id: String, state: State<'_, AppState>) -> Result<(), String> {
+    let mut vault = state.token_vault.lock();
+    if vault.token_map.remove(&token_id).is_some() {
+        log::info!("Token '{}' removed from vault", token_id);
+        Ok(())
+    } else {
+        Err(format!("Token '{}' not found in vault", token_id))
+    }
+}
+
 /// Manually tokenize text and copy to clipboard
 #[tauri::command]
 async fn tokenize_and_copy(
@@ -853,6 +865,7 @@ pub fn run() {
             get_sidecar_status,
             get_token_vault,
             clear_token_vault,
+            delete_token,
             tokenize_and_copy,
             detokenize_text,
             get_config,
