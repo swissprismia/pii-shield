@@ -113,6 +113,8 @@ jobs:
         run: |
           cp src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin \
              src-tauri/binaries/presidio-sidecar-x86_64-apple-darwin
+          cp src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin \
+             src-tauri/binaries/presidio-sidecar-universal-apple-darwin
 
       - name: Build Tauri app (universal)
         run: npm run tauri build -- --target universal-apple-darwin
