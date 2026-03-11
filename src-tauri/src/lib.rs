@@ -360,8 +360,7 @@ fn start_input_listener(
                 EventType::KeyPress(Key::MetaLeft) | EventType::KeyPress(Key::MetaRight) => {
                     META_PRESSED.store(true, Ordering::SeqCst);
                 }
-                EventType::KeyRelease(Key::MetaLeft)
-                | EventType::KeyRelease(Key::MetaRight) => {
+                EventType::KeyRelease(Key::MetaLeft) | EventType::KeyRelease(Key::MetaRight) => {
                     META_PRESSED.store(false, Ordering::SeqCst);
                 }
 
