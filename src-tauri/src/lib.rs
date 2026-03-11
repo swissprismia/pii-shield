@@ -108,6 +108,7 @@ fn should_auto_anonymize(window_info: &window::WindowInfo, keywords: &[String]) 
 
 /// Shared state for keyboard hook (needs to be 'static for rdev callback)
 static CTRL_PRESSED: AtomicBool = AtomicBool::new(false);
+static META_PRESSED: AtomicBool = AtomicBool::new(false); // macOS Command key
 
 /// Token vault for storing PII token mappings
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
@@ -335,7 +336,7 @@ fn detokenize_with_vault(text: &str, token_vault: &TokenVault) -> String {
     result
 }
 
-/// Start the global input listener to intercept paste actions (Ctrl+V, Ctrl+X, right-click)
+/// Start the global input listener to intercept paste actions (Ctrl+V / Cmd+V, Ctrl+X / Cmd+X, right-click)
 fn start_input_listener(
     pending_tokenization: Arc<Mutex<Option<TokenizationResult>>>,
     token_vault: Arc<Mutex<TokenVault>>,
@@ -355,23 +356,32 @@ fn start_input_listener(
                     CTRL_PRESSED.store(false, Ordering::SeqCst);
                 }
 
-                // Ctrl+V - Paste operation
+                // Track Meta (Command) key state - macOS
+                EventType::KeyPress(Key::MetaLeft) | EventType::KeyPress(Key::MetaRight) => {
+                    META_PRESSED.store(true, Ordering::SeqCst);
+                }
+                EventType::KeyRelease(Key::MetaLeft)
+                | EventType::KeyRelease(Key::MetaRight) => {
+                    META_PRESSED.store(false, Ordering::SeqCst);
+                }
+
+                // Ctrl+V (Windows/Linux) or Cmd+V (macOS) - Paste operation
                 EventType::KeyPress(Key::KeyV) => {
-                    if CTRL_PRESSED.load(Ordering::SeqCst) {
-                        log::debug!("Ctrl+V detected!");
+                    if CTRL_PRESSED.load(Ordering::SeqCst) || META_PRESSED.load(Ordering::SeqCst) {
+                        log::debug!("Paste shortcut detected (Ctrl+V / Cmd+V)!");
                         try_tokenize_for_browser(
                             &pending_tokenization,
                             &token_vault,
                             &app_handle,
-                            "Ctrl+V",
+                            "Ctrl+V / Cmd+V",
                         );
                     }
                 }
 
-                // Ctrl+X - Cut operation (tokenize in case they paste later)
+                // Ctrl+X (Windows/Linux) or Cmd+X (macOS) - Cut operation
                 EventType::KeyPress(Key::KeyX) => {
-                    if CTRL_PRESSED.load(Ordering::SeqCst) {
-                        log::debug!("Ctrl+X detected - clipboard will be re-analyzed on change");
+                    if CTRL_PRESSED.load(Ordering::SeqCst) || META_PRESSED.load(Ordering::SeqCst) {
+                        log::debug!("Cut shortcut detected (Ctrl+X / Cmd+X) - clipboard will be re-analyzed on change");
                         // Note: The clipboard polling will detect the new content and analyze it
                         // We don't need to do anything special here, but we log for debugging
                     }
