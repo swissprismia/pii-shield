@@ -187,39 +187,49 @@ impl PresidioSidecar {
     ) -> Result<(), SidecarError> {
         log::info!("Starting Python sidecar from: {:?}", script_path);
 
-        // Try to use venv Python first
-        let venv_python = script_path
-            .parent()
-            .map(|p| p.join(".venv").join("Scripts").join("python.exe"));
+        let python_candidates = python_command_candidates(script_path);
+        let mut attempted = Vec::new();
+        let mut last_error = None;
 
-        let python_cmd = if let Some(ref venv_path) = venv_python {
-            if venv_path.exists() {
-                log::info!("Using venv Python: {:?}", venv_path);
-                venv_path.to_str().unwrap_or("python")
-            } else {
-                log::warn!("venv not found, trying system Python");
-                "python"
+        for python_cmd in python_candidates {
+            let python_label = python_cmd.to_string_lossy().to_string();
+            attempted.push(python_label.clone());
+            log::info!("Trying Python runtime: {}", python_label);
+
+            match Command::new(&python_cmd)
+                .arg(script_path)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+            {
+                Ok(child) => match self.initialize_child(child).await {
+                    Ok(child) => {
+                        self.child = Some(child);
+                        return Ok(());
+                    }
+                    Err(err) => {
+                        log::warn!(
+                            "Failed to initialize Python runtime {}: {}",
+                            python_label,
+                            err
+                        );
+                        last_error = Some(err.to_string());
+                    }
+                },
+                Err(err) => {
+                    log::warn!("Failed to start Python runtime {}: {}", python_label, err);
+                    last_error = Some(err.to_string());
+                }
             }
-        } else {
-            "python"
-        };
+        }
 
-        let mut child = Command::new(python_cmd)
-            .arg(script_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
-                SidecarError::StartError(format!("Failed to start Python ({}): {}", python_cmd, e))
-            })?;
-
-        self.setup_io_channels(&mut child).await?;
-        self.child = Some(child);
-
-        // Wait for ready signal
-        self.wait_for_ready().await
+        Err(SidecarError::StartError(format!(
+            "Failed to start Python sidecar. Tried: {}. Last error: {}",
+            attempted.join(", "),
+            last_error.unwrap_or_else(|| "unknown error".to_string())
+        )))
     }
 
     /// Start binary sidecar (production mode)
@@ -229,7 +239,7 @@ impl PresidioSidecar {
     ) -> Result<(), SidecarError> {
         log::info!("Starting binary sidecar from: {:?}", binary_path);
 
-        let mut child = Command::new(binary_path)
+        let child = Command::new(binary_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -237,10 +247,9 @@ impl PresidioSidecar {
             .spawn()
             .map_err(|e| SidecarError::StartError(e.to_string()))?;
 
-        self.setup_io_channels(&mut child).await?;
+        let child = self.initialize_child(child).await?;
         self.child = Some(child);
-
-        self.wait_for_ready().await
+        Ok(())
     }
 
     /// Start mock sidecar for development when Presidio isn't available
@@ -303,6 +312,25 @@ impl PresidioSidecar {
         self.response_rx = Some(Arc::new(Mutex::new(response_rx)));
 
         Ok(())
+    }
+
+    async fn initialize_child(&mut self, mut child: Child) -> Result<Child, SidecarError> {
+        self.stdin_tx = None;
+        self.response_rx = None;
+
+        if let Err(err) = self.setup_io_channels(&mut child).await {
+            self.stdin_tx = None;
+            self.response_rx = None;
+            return Err(err);
+        }
+
+        if let Err(err) = self.wait_for_ready().await {
+            self.stdin_tx = None;
+            self.response_rx = None;
+            return Err(err);
+        }
+
+        Ok(child)
     }
 
     /// Wait for the sidecar to signal it's ready
@@ -569,6 +597,43 @@ impl Drop for PresidioSidecar {
     }
 }
 
+fn python_command_candidates(script_path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(parent) = script_path.parent() {
+        let venv_dirs = [".venv", "venv"];
+
+        #[cfg(target_os = "windows")]
+        {
+            for venv_dir in venv_dirs {
+                candidates.push(parent.join(venv_dir).join("Scripts").join("python.exe"));
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            for venv_dir in venv_dirs {
+                candidates.push(parent.join(venv_dir).join("bin").join("python"));
+                candidates.push(parent.join(venv_dir).join("bin").join("python3"));
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        candidates.push(std::path::PathBuf::from("python"));
+        candidates.push(std::path::PathBuf::from("py"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        candidates.push(std::path::PathBuf::from("python3"));
+        candidates.push(std::path::PathBuf::from("python"));
+    }
+
+    candidates
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,5 +668,32 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.entities.len(), 2);
+    }
+
+    #[test]
+    fn test_python_candidates_include_virtualenv_and_system_fallback() {
+        let script_path = std::path::Path::new("sidecar/presidio_sidecar.py");
+        let candidates = python_command_candidates(script_path);
+        let candidate_strings: Vec<String> = candidates
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+
+        #[cfg(target_os = "windows")]
+        {
+            assert!(candidate_strings.iter().any(|path| {
+                path.ends_with(".venv\\Scripts\\python.exe")
+                    || path.ends_with("venv\\Scripts\\python.exe")
+            }));
+            assert!(candidate_strings.iter().any(|path| path == "python"));
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            assert!(candidate_strings.iter().any(|path| {
+                path.ends_with(".venv/bin/python") || path.ends_with("venv/bin/python")
+            }));
+            assert!(candidate_strings.iter().any(|path| path == "python3"));
+        }
     }
 }

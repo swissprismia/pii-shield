@@ -3,7 +3,7 @@
 [![CI](https://github.com/swissprismia/pii-shield/actions/workflows/ci.yml/badge.svg)](https://github.com/swissprismia/pii-shield/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/swissprismia/pii-shield)](https://github.com/swissprismia/pii-shield/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)](https://github.com/swissprismia/pii-shield/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/swissprismia/pii-shield/releases)
 
 **The only native desktop app that protects your privacy system-wide — in every app, not just browsers.**
 
@@ -78,17 +78,28 @@ Clipboard:  "Hi John, I'll send details to john.doe@example.com"
 ### Download a Pre-Built Release (Recommended)
 
 1. Go to the [Releases page](https://github.com/swissprismia/pii-shield/releases/latest)
-2. Download the installer for your platform:
+2. Download the package for your platform:
    - **Windows**: `PII.Shield_x.x.x_x64-setup.exe`
    - **macOS**: `PII.Shield_x.x.x_universal.dmg` (Apple Silicon + Intel)
-3. Run the installer
-4. Launch PII Shield — it will appear in your system tray
+   - **Linux (x64)**: `.AppImage` or `.deb`
+3. Install or launch it:
+   - **Windows**: run the installer
+   - **macOS**: open the DMG and move the app into `Applications`
+   - **Linux AppImage**: `chmod +x PII-Shield-*.AppImage && ./PII-Shield-*.AppImage`
+   - **Linux Debian/Ubuntu**: `sudo apt install ./pii-shield_*_amd64.deb`
+4. Launch PII Shield - it will appear in your system tray
 
 > **Note**: The app bundles a pre-compiled Python sidecar. You do not need Python installed.
 
 ### macOS Gatekeeper
 
 On first launch on macOS, right-click the app and select **Open** to bypass Gatekeeper (the app is not notarized in pre-release builds).
+
+### Linux Notes
+
+- Linux packaging targets `x86_64-unknown-linux-gnu` with `.AppImage` and `.deb` artifacts.
+- Active-window detection currently targets X11 desktops.
+- On Wayland, clipboard anonymization still works, but app-aware auto-paste behavior may be limited.
 
 ---
 
@@ -177,6 +188,7 @@ npm run tauri dev
 - Node.js 18+, Rust 1.70+, Python 3.9+
 - Windows: Visual Studio Build Tools, WebView2
 - macOS: Xcode Command Line Tools
+- Linux (Ubuntu/Debian): `sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev libxtst-dev libx11-dev`
 
 ---
 
