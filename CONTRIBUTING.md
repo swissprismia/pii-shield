@@ -22,9 +22,16 @@ Thank you for your interest in contributing! This document covers how to set up 
 | [Node.js](https://nodejs.org/) | 18+ | Frontend build |
 | [Rust](https://rustup.rs/) | 1.70+ | Tauri core |
 | [Python](https://python.org/) | 3.9+ | Presidio sidecar |
-| Visual Studio Build Tools | Latest | Windows only — C++ toolchain |
+| Visual Studio Build Tools | Latest | Windows only - C++ toolchain |
 | WebView2 Runtime | Latest | Windows only |
 | Xcode Command Line Tools | Latest | macOS only |
+| Linux system packages | Current distro packages | Linux only - WebKitGTK, GTK3, tray, and X11 headers |
+
+Ubuntu/Debian build dependencies:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libxdo-dev libxtst-dev libx11-dev
+```
 
 ### 1. Clone the repository
 
@@ -150,6 +157,9 @@ cd ..
 
 ```bash
 npm run tauri build
+
+# Linux packages only
+npm run tauri build -- --bundles appimage,deb
 ```
 
 Outputs are in `src-tauri/target/release/bundle/`.
