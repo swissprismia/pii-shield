@@ -383,8 +383,9 @@ fn start_input_listener(
 
                 // Ctrl+V (Windows/Linux) or Cmd+V (macOS) - Paste operation
                 EventType::KeyPress(Key::KeyV) => {
-                    if CTRL_PRESSED.load(Ordering::SeqCst) || meta_pressed() {
-                        let shortcut = if meta_pressed() { "Cmd+V" } else { "Ctrl+V" };
+                    let meta = meta_pressed();
+                    if CTRL_PRESSED.load(Ordering::SeqCst) || meta {
+                        let shortcut = if meta { "Cmd+V" } else { "Ctrl+V" };
                         log::debug!("Paste shortcut detected ({shortcut})!");
                         try_tokenize_for_browser(
                             &pending_tokenization,
@@ -397,8 +398,9 @@ fn start_input_listener(
 
                 // Ctrl+X (Windows/Linux) or Cmd+X (macOS) - Cut operation
                 EventType::KeyPress(Key::KeyX) => {
-                    if CTRL_PRESSED.load(Ordering::SeqCst) || meta_pressed() {
-                        let shortcut = if meta_pressed() { "Cmd+X" } else { "Ctrl+X" };
+                    let meta = meta_pressed();
+                    if CTRL_PRESSED.load(Ordering::SeqCst) || meta {
+                        let shortcut = if meta { "Cmd+X" } else { "Ctrl+X" };
                         log::debug!(
                             "{shortcut} detected - clipboard will be re-analyzed on change"
                         );
