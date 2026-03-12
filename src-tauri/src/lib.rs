@@ -108,6 +108,7 @@ fn should_auto_anonymize(window_info: &window::WindowInfo, keywords: &[String]) 
 
 /// Shared state for keyboard hook (needs to be 'static for rdev callback)
 static CTRL_PRESSED: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "macos")]
 static META_PRESSED: AtomicBool = AtomicBool::new(false); // macOS Command key
 
 /// Token vault for storing PII token mappings
@@ -356,17 +357,30 @@ fn start_input_listener(
                     CTRL_PRESSED.store(false, Ordering::SeqCst);
                 }
 
-                // Track Meta (Command) key state - macOS
+                // Track Meta (Command) key state - macOS only
+                // (on Windows, MetaLeft/MetaRight is the Win key, not a paste modifier)
+                #[cfg(target_os = "macos")]
                 EventType::KeyPress(Key::MetaLeft) | EventType::KeyPress(Key::MetaRight) => {
                     META_PRESSED.store(true, Ordering::SeqCst);
                 }
+                #[cfg(target_os = "macos")]
                 EventType::KeyRelease(Key::MetaLeft) | EventType::KeyRelease(Key::MetaRight) => {
                     META_PRESSED.store(false, Ordering::SeqCst);
                 }
 
                 // Ctrl+V (Windows/Linux) or Cmd+V (macOS) - Paste operation
                 EventType::KeyPress(Key::KeyV) => {
-                    if CTRL_PRESSED.load(Ordering::SeqCst) || META_PRESSED.load(Ordering::SeqCst) {
+                    let meta = {
+                        #[cfg(target_os = "macos")]
+                        {
+                            META_PRESSED.load(Ordering::SeqCst)
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            false
+                        }
+                    };
+                    if CTRL_PRESSED.load(Ordering::SeqCst) || meta {
                         log::debug!("Paste shortcut detected (Ctrl+V / Cmd+V)!");
                         try_tokenize_for_browser(
                             &pending_tokenization,
@@ -379,7 +393,17 @@ fn start_input_listener(
 
                 // Ctrl+X (Windows/Linux) or Cmd+X (macOS) - Cut operation
                 EventType::KeyPress(Key::KeyX) => {
-                    if CTRL_PRESSED.load(Ordering::SeqCst) || META_PRESSED.load(Ordering::SeqCst) {
+                    let meta = {
+                        #[cfg(target_os = "macos")]
+                        {
+                            META_PRESSED.load(Ordering::SeqCst)
+                        }
+                        #[cfg(not(target_os = "macos"))]
+                        {
+                            false
+                        }
+                    };
+                    if CTRL_PRESSED.load(Ordering::SeqCst) || meta {
                         log::debug!("Cut shortcut detected (Ctrl+X / Cmd+X) - clipboard will be re-analyzed on change");
                         // Note: The clipboard polling will detect the new content and analyze it
                         // We don't need to do anything special here, but we log for debugging
