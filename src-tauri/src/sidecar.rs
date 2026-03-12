@@ -204,11 +204,20 @@ impl PresidioSidecar {
                 .kill_on_drop(true)
                 .spawn()
             {
-                Ok(mut child) => {
-                    self.setup_io_channels(&mut child).await?;
-                    self.child = Some(child);
-                    return self.wait_for_ready().await;
-                }
+                Ok(child) => match self.initialize_child(child).await {
+                    Ok(child) => {
+                        self.child = Some(child);
+                        return Ok(());
+                    }
+                    Err(err) => {
+                        log::warn!(
+                            "Failed to initialize Python runtime {}: {}",
+                            python_label,
+                            err
+                        );
+                        last_error = Some(err.to_string());
+                    }
+                },
                 Err(err) => {
                     log::warn!("Failed to start Python runtime {}: {}", python_label, err);
                     last_error = Some(err.to_string());
@@ -230,7 +239,7 @@ impl PresidioSidecar {
     ) -> Result<(), SidecarError> {
         log::info!("Starting binary sidecar from: {:?}", binary_path);
 
-        let mut child = Command::new(binary_path)
+        let child = Command::new(binary_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -238,10 +247,9 @@ impl PresidioSidecar {
             .spawn()
             .map_err(|e| SidecarError::StartError(e.to_string()))?;
 
-        self.setup_io_channels(&mut child).await?;
+        let child = self.initialize_child(child).await?;
         self.child = Some(child);
-
-        self.wait_for_ready().await
+        Ok(())
     }
 
     /// Start mock sidecar for development when Presidio isn't available
@@ -304,6 +312,25 @@ impl PresidioSidecar {
         self.response_rx = Some(Arc::new(Mutex::new(response_rx)));
 
         Ok(())
+    }
+
+    async fn initialize_child(&mut self, mut child: Child) -> Result<Child, SidecarError> {
+        self.stdin_tx = None;
+        self.response_rx = None;
+
+        if let Err(err) = self.setup_io_channels(&mut child).await {
+            self.stdin_tx = None;
+            self.response_rx = None;
+            return Err(err);
+        }
+
+        if let Err(err) = self.wait_for_ready().await {
+            self.stdin_tx = None;
+            self.response_rx = None;
+            return Err(err);
+        }
+
+        Ok(child)
     }
 
     /// Wait for the sidecar to signal it's ready
