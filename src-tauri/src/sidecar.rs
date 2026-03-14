@@ -333,7 +333,12 @@ impl PresidioSidecar {
         Ok(child)
     }
 
-    /// Wait for the sidecar to signal it's ready
+    /// Wait for the sidecar to signal it's ready.
+    ///
+    /// Note: `rx_guard` is held for the full timeout duration. This is safe because
+    /// `send_request` guards on `stdin_tx.is_none()` and returns `Err(NotRunning)`
+    /// before acquiring the same lock — so no concurrent caller can block here
+    /// during startup. This invariant must be preserved if the init flow changes.
     async fn wait_for_ready(&mut self) -> Result<(), SidecarError> {
         if let Some(ref rx) = self.response_rx {
             let mut rx_guard = rx.lock().await;

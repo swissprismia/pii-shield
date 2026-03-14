@@ -124,13 +124,13 @@ jobs:
           ARM64=src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin
           X86=src-tauri/binaries/presidio-sidecar-x86_64-apple-darwin
           UNIVERSAL=src-tauri/binaries/presidio-sidecar-universal-apple-darwin
-          if [ -f "$X86" ]; then
+          if [ -f "$X86" ] && lipo -archs "$X86" 2>/dev/null | grep -q x86_64; then
             lipo -create -output "$UNIVERSAL" "$ARM64" "$X86"
-            echo "Created real universal binary"
+            echo "Created real universal binary ($(lipo -archs "$UNIVERSAL"))"
           else
+            echo "x86_64 binary missing or not a valid x86_64 Mach-O, falling back to arm64 copy"
             cp "$ARM64" "$UNIVERSAL"
             cp "$ARM64" "$X86"
-            echo "x86_64 build failed, falling back to arm64 copy"
           fi
 
       - name: Build Tauri app (universal)
