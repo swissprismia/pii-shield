@@ -337,7 +337,7 @@ impl PresidioSidecar {
     async fn wait_for_ready(&mut self) -> Result<(), SidecarError> {
         if let Some(ref rx) = self.response_rx {
             let mut rx_guard = rx.lock().await;
-            match tokio::time::timeout(std::time::Duration::from_secs(30), rx_guard.recv()).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(120), rx_guard.recv()).await {
                 Ok(Some(line)) => {
                     if line.contains("ready") {
                         log::info!("Sidecar is ready: {}", line);
