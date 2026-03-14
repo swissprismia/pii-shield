@@ -66,10 +66,61 @@ jobs:
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/bundle/msi/*.msi
 
-  # Build macOS release binary
+  # Build arm64 Python sidecar on native ARM64 runner
+  build-sidecar-arm64:
+    name: Build Python sidecar (arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies and build sidecar
+        working-directory: sidecar
+        run: |
+          pip install -r requirements.txt pyinstaller
+          python -m spacy download en_core_web_lg
+          python build_sidecar.py
+
+      - name: Upload arm64 sidecar artifact
+        uses: actions/upload-artifact@v8
+        with:
+          name: sidecar-arm64
+          path: src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin
+
+  # Build x86_64 Python sidecar on native Intel runner
+  build-sidecar-x86_64:
+    name: Build Python sidecar (x86_64)
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies and build sidecar
+        working-directory: sidecar
+        run: |
+          pip install -r requirements.txt pyinstaller
+          python -m spacy download en_core_web_lg
+          python build_sidecar.py
+
+      - name: Upload x86_64 sidecar artifact
+        uses: actions/upload-artifact@v8
+        with:
+          name: sidecar-x86_64
+          path: src-tauri/binaries/presidio-sidecar-x86_64-apple-darwin
+
+  # Build macOS release binary (universal)
   build-macos:
     name: Build (macOS Universal)
-    runs-on: macos-latest
+    runs-on: macos-14
+    needs: [build-sidecar-arm64, build-sidecar-x86_64]
     steps:
       - uses: actions/checkout@v6
 
@@ -89,33 +140,31 @@ jobs:
           node-version: "20"
           cache: "npm"
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
       - name: Install dependencies
         run: npm ci
 
-      - name: Install Python sidecar dependencies
-        working-directory: sidecar
+      - name: Download arm64 sidecar
+        uses: actions/download-artifact@v8
+        with:
+          name: sidecar-arm64
+          path: src-tauri/binaries/
+
+      - name: Download x86_64 sidecar
+        uses: actions/download-artifact@v8
+        with:
+          name: sidecar-x86_64
+          path: src-tauri/binaries/
+
+      - name: Create universal sidecar binary
         run: |
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: Download spaCy English model
-        run: python -m spacy download en_core_web_lg
-
-      - name: Build Python sidecar
-        working-directory: sidecar
-        run: python build_sidecar.py
-
-      - name: Copy sidecar for x86_64 (Rosetta 2 compatibility)
-        run: |
-          cp src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin \
-             src-tauri/binaries/presidio-sidecar-x86_64-apple-darwin
-          cp src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin \
-             src-tauri/binaries/presidio-sidecar-universal-apple-darwin
+          ARM64=src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin
+          X86=src-tauri/binaries/presidio-sidecar-x86_64-apple-darwin
+          UNIVERSAL=src-tauri/binaries/presidio-sidecar-universal-apple-darwin
+          chmod +x "$ARM64" "$X86"
+          echo "arm64 archs: $(lipo -archs "$ARM64")"
+          echo "x86_64 archs: $(lipo -archs "$X86")"
+          lipo -create -output "$UNIVERSAL" "$ARM64" "$X86"
+          echo "Created real universal binary: $(lipo -archs "$UNIVERSAL")"
 
       - name: Build Tauri app (universal)
         run: npm run tauri build -- --target universal-apple-darwin --no-sign

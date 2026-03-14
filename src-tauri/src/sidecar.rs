@@ -333,11 +333,17 @@ impl PresidioSidecar {
         Ok(child)
     }
 
-    /// Wait for the sidecar to signal it's ready
+    /// Wait for the sidecar to signal it's ready.
+    ///
+    /// `rx_guard` is held for the full timeout duration. This is safe because
+    /// `start()` takes `&mut self`, so the outer `Mutex<PresidioSidecar>` held by
+    /// the caller prevents any concurrent `send_request` from running while startup
+    /// is in progress. If that outer lock is ever removed, this reasoning must be
+    /// revisited.
     async fn wait_for_ready(&mut self) -> Result<(), SidecarError> {
         if let Some(ref rx) = self.response_rx {
             let mut rx_guard = rx.lock().await;
-            match tokio::time::timeout(std::time::Duration::from_secs(30), rx_guard.recv()).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(120), rx_guard.recv()).await {
                 Ok(Some(line)) => {
                     if line.contains("ready") {
                         log::info!("Sidecar is ready: {}", line);
