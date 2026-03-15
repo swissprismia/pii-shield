@@ -86,7 +86,7 @@ jobs:
           python build_sidecar.py
 
       - name: Upload arm64 sidecar artifact
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v4
         with:
           name: sidecar-arm64
           path: src-tauri/binaries/presidio-sidecar-aarch64-apple-darwin
@@ -111,7 +111,7 @@ jobs:
           python build_sidecar.py
 
       - name: Upload x86_64 sidecar artifact
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v4
         with:
           name: sidecar-x86_64
           path: src-tauri/binaries/presidio-sidecar-x86_64-apple-darwin
@@ -144,13 +144,13 @@ jobs:
         run: npm ci
 
       - name: Download arm64 sidecar
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: sidecar-arm64
           path: src-tauri/binaries/
 
       - name: Download x86_64 sidecar
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: sidecar-x86_64
           path: src-tauri/binaries/
