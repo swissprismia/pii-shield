@@ -202,6 +202,39 @@ def log_info(message: str):
     print(f"[INFO] {message}", file=sys.stderr, flush=True)
 
 
+def sanitize_unicode_string(value: str) -> str:
+    """
+    Repair malformed UTF-16 surrogate code units in a Python string.
+
+    Clipboard and webview inputs can occasionally surface lone surrogates.
+    `json.dumps` will serialize them as `\\uDxxx`, but Rust's JSON parser rejects
+    those invalid Unicode escapes. This round-trip combines valid surrogate pairs
+    and replaces any remaining malformed code units with U+FFFD.
+    """
+    return value.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
+
+
+def sanitize_json_value(value):
+    """Recursively sanitize strings before they cross the JSON boundary."""
+    if isinstance(value, str):
+        return sanitize_unicode_string(value)
+    if isinstance(value, list):
+        return [sanitize_json_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [sanitize_json_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            sanitize_json_value(key): sanitize_json_value(item)
+            for key, item in value.items()
+        }
+    return value
+
+
+def emit_json(payload: dict):
+    """Write a sanitized JSON response on a single stdout line."""
+    print(json.dumps(sanitize_json_value(payload)), flush=True)
+
+
 def analyze_text(
     analyzer, anonymizer, text: str, language: str = "en", score_threshold: float = 0.5
 ) -> dict:
@@ -653,7 +686,7 @@ def main():
         log_info("Presidio initialized successfully")
 
     # Signal ready
-    print(json.dumps({"status": "ready", "presidio": not use_fallback}), flush=True)
+    emit_json({"status": "ready", "presidio": not use_fallback})
 
     # Main loop: read requests from stdin, write responses to stdout
     for line in sys.stdin:
@@ -662,15 +695,15 @@ def main():
             continue
 
         try:
-            request = json.loads(line)
+            request = sanitize_json_value(json.loads(line))
             response = handle_request(request, analyzer, anonymizer, use_fallback)
-            print(json.dumps(response), flush=True)
+            emit_json(response)
         except json.JSONDecodeError as e:
             log_error(f"Invalid JSON: {e}")
-            print(json.dumps({"success": False, "error": "Invalid JSON"}), flush=True)
+            emit_json({"success": False, "error": "Invalid JSON"})
         except Exception as e:
             log_error(f"Error handling request: {e}")
-            print(json.dumps({"success": False, "error": str(e)}), flush=True)
+            emit_json({"success": False, "error": str(e)})
 
 
 if __name__ == "__main__":
