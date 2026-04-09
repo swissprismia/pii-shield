@@ -1,6 +1,10 @@
+from pathlib import Path
+import sys
 import unittest
 
-from sidecar.presidio_sidecar import sanitize_json_value, sanitize_unicode_string
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from presidio_sidecar import sanitize_json_value, sanitize_unicode_string
 
 
 class JsonSanitizationTests(unittest.TestCase):
