@@ -94,7 +94,7 @@ jobs:
   # Build x86_64 Python sidecar on native Intel runner
   build-sidecar-x86_64:
     name: Build Python sidecar (x86_64)
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v6
 
