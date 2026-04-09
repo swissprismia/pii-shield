@@ -1,6 +1,6 @@
 [package]
 name = "pii-shield"
-version = "0.1.0"
+version = "0.3.1"
 description = "Automatically detect and anonymize sensitive information before pasting into AI assistants"
 authors = ["PII Shield Team"]
 edition = "2021"
