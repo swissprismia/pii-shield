@@ -9,6 +9,8 @@
 
 PII Shield sits in your system tray, silently monitoring your clipboard. The moment you copy text containing personal information, it detects and tokenizes PII using real NLP — then automatically replaces the clipboard before you paste into any AI assistant. When you copy the AI's response back, it restores your original data. 100% offline. Zero data leaves your machine.
 
+![PII Shield_720p](https://github.com/user-attachments/assets/3875c31d-776a-4ecb-bd0e-35ef6ddbf77b)
+
 ---
 
 ## Why PII Shield?
