@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { getVersion } from '@tauri-apps/api/app';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
 
 // ── Application State ────────────────────────────────────────────────────────
@@ -18,6 +19,7 @@ let state = {
   history: [],
   config: null,
   sidecarReady: false,
+  startupError: '',
 };
 
 // ── DOM Elements ─────────────────────────────────────────────────────────────
@@ -27,6 +29,8 @@ const elements = {
   loadingSection: document.getElementById('loading-section'),
   detectionSection: document.getElementById('detection-section'),
   emptySection: document.getElementById('empty-section'),
+  emptyTitle: document.getElementById('empty-title'),
+  emptyMessage: document.getElementById('empty-message'),
   detectionList: document.getElementById('detection-list'),
   detectionTitle: document.getElementById('detection-title'),
   originalText: document.getElementById('original-text'),
@@ -51,6 +55,7 @@ const elements = {
   statTokenized: document.getElementById('stat-tokenized'),
   statDetokenized: document.getElementById('stat-detokenized'),
   // Header
+  appVersion: document.getElementById('app-version'),
   activeWindow: document.getElementById('active-window'),
   statusLabel: document.getElementById('status-label'),
   toastContainer: document.getElementById('toast-container'),
@@ -219,13 +224,23 @@ function updateDashboard() {
 
   // Loading / Ready state
   if (!state.sidecarReady) {
-    elements.loadingSection.style.display = 'block';
-    elements.detectionSection.style.display = 'none';
-    elements.emptySection.style.display = 'none';
+    if (state.startupError) {
+      elements.loadingSection.style.display = 'none';
+      elements.detectionSection.style.display = 'none';
+      elements.emptySection.style.display = 'block';
+      elements.emptyTitle.textContent = 'PII Engine Failed to Start';
+      elements.emptyMessage.textContent = state.startupError;
+    } else {
+      elements.loadingSection.style.display = 'block';
+      elements.detectionSection.style.display = 'none';
+      elements.emptySection.style.display = 'none';
+    }
     return;
   }
 
   elements.loadingSection.style.display = 'none';
+  elements.emptyTitle.textContent = 'Clipboard Monitoring Active';
+  elements.emptyMessage.textContent = 'Copy text with PII to tokenize it before pasting to AI. Copy AI responses to automatically restore original values.';
 
   if (state.entities.length > 0) {
     elements.detectionSection.style.display = 'block';
@@ -622,6 +637,13 @@ async function init() {
 
   await initTauriListeners();
 
+  try {
+    const appVersion = await getVersion();
+    elements.appVersion.textContent = `PII Shield v${appVersion}`;
+  } catch (err) {
+    console.warn('Failed to load app version:', err);
+  }
+
   // Load config for Settings tab
   try {
     state.config = await invoke('get_config');
@@ -634,10 +656,12 @@ async function init() {
     await invoke('start_monitoring');
     console.log('Clipboard monitoring started');
     state.sidecarReady = true;
+    state.startupError = '';
     elements.statusLabel.textContent = 'Monitoring';
   } catch (error) {
     console.error('Failed to start monitoring:', error);
-    showToast('Error', 'Failed to start clipboard monitoring', 'error');
+    state.startupError = `Failed to start clipboard monitoring: ${error}`;
+    showToast('Error', state.startupError, 'error');
     elements.statusLabel.textContent = 'Error';
   }
 

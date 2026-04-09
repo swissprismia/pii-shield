@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::process::Stdio;
 use tauri::AppHandle;
+use tauri::Manager;
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
@@ -124,7 +126,7 @@ impl PresidioSidecar {
     }
 
     /// Start the sidecar process
-    pub async fn start(&mut self, _app_handle: &AppHandle) -> Result<(), SidecarError> {
+    pub async fn start(&mut self, app_handle: &AppHandle) -> Result<(), SidecarError> {
         if self.child.is_some() {
             log::info!("Sidecar already running");
             return Ok(());
@@ -132,38 +134,16 @@ impl PresidioSidecar {
 
         log::info!("Starting Presidio sidecar...");
 
-        // Try to find the sidecar binary in various locations
-        let sidecar_paths = [
-            // Development path - Python script (from src-tauri, go up one level to project root)
-            std::env::current_dir()
-                .unwrap_or_default()
-                .parent()
-                .map(|p| p.join("sidecar").join("presidio_sidecar.py"))
-                .unwrap_or_default(),
-            // Bundled binary (PyInstaller)
-            std::env::current_exe()
-                .unwrap_or_default()
-                .parent()
-                .map(|p| p.join("presidio-sidecar"))
-                .unwrap_or_default(),
-            // macOS app bundle
-            std::env::current_exe()
-                .unwrap_or_default()
-                .parent()
-                .and_then(|p| p.parent())
-                .map(|p| p.join("Resources").join("presidio-sidecar"))
-                .unwrap_or_default(),
-        ];
-
         // Check for Python script first (development mode)
-        let python_script = &sidecar_paths[0];
+        let python_script = development_sidecar_script();
         log::info!("Checking for Python script at: {:?}", python_script);
         if python_script.exists() {
-            return self.start_python_sidecar(python_script).await;
+            return self.start_python_sidecar(&python_script).await;
         }
 
         // Try bundled binaries
-        for path in &sidecar_paths[1..] {
+        let bundled_candidates = bundled_sidecar_candidates(app_handle);
+        for path in &bundled_candidates {
             log::info!("Checking for binary at: {:?}", path);
             if path.exists() {
                 return self.start_binary_sidecar(path).await;
@@ -172,12 +152,14 @@ impl PresidioSidecar {
 
         // If no sidecar found, return error
         log::error!(
-            "No sidecar found. Current dir: {:?}",
-            std::env::current_dir().ok()
+            "No sidecar found. Current dir: {:?}. Tried: {:?}",
+            std::env::current_dir().ok(),
+            bundled_candidates
         );
-        Err(SidecarError::StartError(
-            "Presidio sidecar not found. Make sure presidio_sidecar.py exists in the sidecar directory.".to_string()
-        ))
+        Err(SidecarError::StartError(format!(
+            "Presidio sidecar not found. Tried development script {:?} and bundled paths {:?}.",
+            python_script, bundled_candidates
+        )))
     }
 
     /// Start Python sidecar (development mode)
@@ -640,6 +622,74 @@ fn python_command_candidates(script_path: &std::path::Path) -> Vec<std::path::Pa
     candidates
 }
 
+fn development_sidecar_script() -> std::path::PathBuf {
+    std::env::current_dir()
+        .unwrap_or_default()
+        .parent()
+        .map(|p| p.join("sidecar").join("presidio_sidecar.py"))
+        .unwrap_or_default()
+}
+
+fn packaged_sidecar_names() -> &'static [&'static str] {
+    #[cfg(target_os = "windows")]
+    {
+        &[
+            "presidio-sidecar-x86_64-pc-windows-msvc.exe",
+            "presidio-sidecar.exe",
+            "presidio-sidecar",
+        ]
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        &[
+            "presidio-sidecar-universal-apple-darwin",
+            "presidio-sidecar-aarch64-apple-darwin",
+            "presidio-sidecar-x86_64-apple-darwin",
+            "presidio-sidecar",
+        ]
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        &[
+            "presidio-sidecar-x86_64-unknown-linux-gnu",
+            "presidio-sidecar-aarch64-unknown-linux-gnu",
+            "presidio-sidecar",
+        ]
+    }
+}
+
+fn bundled_sidecar_candidates(app_handle: &AppHandle) -> Vec<std::path::PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Ok(resource_dir) = app_handle.path().resource_dir() {
+        dirs.push(resource_dir);
+    }
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(exe_dir) = current_exe.parent() {
+            dirs.push(exe_dir.to_path_buf());
+            if let Some(parent) = exe_dir.parent() {
+                dirs.push(parent.join("Resources"));
+            }
+        }
+    }
+
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+    for dir in dirs {
+        for name in packaged_sidecar_names() {
+            let path = dir.join(name);
+            if seen.insert(path.clone()) {
+                candidates.push(path);
+            }
+        }
+    }
+
+    candidates
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -701,5 +751,19 @@ mod tests {
             }));
             assert!(candidate_strings.iter().any(|path| path == "python3"));
         }
+    }
+
+    #[test]
+    fn test_packaged_sidecar_names_include_platform_binary() {
+        let names = packaged_sidecar_names();
+
+        #[cfg(target_os = "windows")]
+        assert!(names.contains(&"presidio-sidecar-x86_64-pc-windows-msvc.exe"));
+
+        #[cfg(target_os = "macos")]
+        assert!(names.contains(&"presidio-sidecar-universal-apple-darwin"));
+
+        #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+        assert!(names.contains(&"presidio-sidecar-x86_64-unknown-linux-gnu"));
     }
 }
