@@ -5,6 +5,7 @@ node_modules/
 # Build outputs
 dist/
 target/
+target-*/
 *.pyc
 __pycache__/
 *.egg-info/
