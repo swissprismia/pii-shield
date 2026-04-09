@@ -28,6 +28,11 @@ import re
 from typing import Dict, List, Tuple
 from collections import defaultdict
 
+try:
+    import tldextract
+except ImportError:
+    tldextract = None
+
 
 class SecretsRecognizer:
     """
@@ -190,6 +195,24 @@ def setup_presidio():
     except ImportError as e:
         log_error(f"Failed to import Presidio: {e}")
         return None, None
+
+
+def configure_tldextract_for_offline_use():
+    """
+    Force tldextract to use its bundled snapshot instead of live network fetches.
+
+    Presidio's email recognizer validates candidate domains via tldextract. In a
+    packaged desktop app, waiting on public suffix list downloads can stall the
+    first analysis request or fail outright on restricted networks.
+    """
+    if tldextract is None:
+        return
+
+    tldextract.TLD_EXTRACTOR = tldextract.TLDExtract(
+        suffix_list_urls=(),
+        fallback_to_snapshot=True,
+        cache_dir=None,
+    )
 
 
 def log_error(message: str):
@@ -674,6 +697,8 @@ def main():
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
+
+    configure_tldextract_for_offline_use()
 
     # Try to initialize Presidio
     log_info("Initializing Presidio sidecar...")

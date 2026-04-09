@@ -4,10 +4,25 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from presidio_sidecar import sanitize_json_value, sanitize_unicode_string
+from presidio_sidecar import (
+    configure_tldextract_for_offline_use,
+    sanitize_json_value,
+    sanitize_unicode_string,
+)
 
 
 class JsonSanitizationTests(unittest.TestCase):
+    def test_configure_tldextract_disables_live_suffix_fetches(self):
+        try:
+            import tldextract
+        except ImportError:
+            self.skipTest("tldextract not installed")
+
+        configure_tldextract_for_offline_use()
+
+        self.assertEqual(tldextract.TLD_EXTRACTOR.suffix_list_urls, ())
+        self.assertTrue(tldextract.TLD_EXTRACTOR.fallback_to_snapshot)
+
     def test_sanitize_unicode_string_replaces_lone_surrogates(self):
         value = f"table cell {chr(0xD83D)} markdown"
 
