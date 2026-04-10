@@ -207,7 +207,7 @@ pub struct AppState {
     last_clipboard_hash: Mutex<u64>,
     clipboard_handled: Mutex<bool>,
     monitoring_started: AtomicBool,
-    monitoring_enabled: AtomicBool,
+    interception_enabled: AtomicBool,
     /// App configuration (language, score threshold, monitored apps)
     config: Mutex<config::Config>,
     /// Token vault for storing PII token mappings for de-tokenization
@@ -231,7 +231,7 @@ impl AppState {
             last_clipboard_hash: Mutex::new(0),
             clipboard_handled: Mutex::new(false),
             monitoring_started: AtomicBool::new(false),
-            monitoring_enabled: AtomicBool::new(false),
+            interception_enabled: AtomicBool::new(false),
             config: Mutex::new(config),
             token_vault: Arc::new(Mutex::new(TokenVault::new())),
             pending_tokenization: Arc::new(Mutex::new(None)),
@@ -254,7 +254,7 @@ fn try_tokenize_for_browser(
     trigger: &str,
 ) {
     let state = app_handle.state::<AppState>();
-    if !state.monitoring_enabled.load(Ordering::SeqCst) {
+    if !state.interception_enabled.load(Ordering::SeqCst) {
         return;
     }
 
@@ -371,7 +371,7 @@ fn start_input_listener(
         let callback = move |event: Event| {
             if !app_handle
                 .state::<AppState>()
-                .monitoring_enabled
+                .interception_enabled
                 .load(Ordering::SeqCst)
             {
                 return;
@@ -457,7 +457,7 @@ fn sync_clipboard_tracking(state: &AppState) {
 }
 
 fn set_monitoring_visual_state(app_handle: &AppHandle, enabled: bool) {
-    let (r, g, b, tooltip) = if enabled {
+    let (_r, _g, _b, _tooltip) = if enabled {
         (
             TRAY_IDLE.0,
             TRAY_IDLE.1,
@@ -473,6 +473,12 @@ fn set_monitoring_visual_state(app_handle: &AppHandle, enabled: bool) {
         )
     };
 
+    let (r, g, b) = if enabled { TRAY_IDLE } else { TRAY_PAUSED };
+    let tooltip = if enabled {
+        "PII Shield - monitoring enabled"
+    } else {
+        "PII Shield - monitoring disabled"
+    };
     set_tray_icon(app_handle, r, g, b);
     if let Some(tray) = app_handle.tray_by_id("pii-tray") {
         let _ = tray.set_tooltip(Some(tooltip));
@@ -495,22 +501,18 @@ async fn enable_monitoring(app_handle: &AppHandle, state: &AppState) -> Result<b
     }
 
     sync_clipboard_tracking(state);
-    state.monitoring_enabled.store(true, Ordering::SeqCst);
+    state.interception_enabled.store(true, Ordering::SeqCst);
     set_monitoring_visual_state(app_handle, true);
     emit_monitoring_state(app_handle, true);
     Ok(true)
 }
 
 async fn disable_monitoring(app_handle: &AppHandle, state: &AppState) -> Result<bool, String> {
-    state.monitoring_enabled.store(false, Ordering::SeqCst);
+    state.interception_enabled.store(false, Ordering::SeqCst);
     sync_clipboard_tracking(state);
     {
         let mut pending = state.pending_tokenization.lock();
         *pending = None;
-    }
-    {
-        let mut sidecar = state.sidecar.lock().await;
-        sidecar.stop();
     }
     set_monitoring_visual_state(app_handle, false);
     emit_monitoring_state(app_handle, false);
@@ -557,7 +559,14 @@ async fn start_monitoring(
             interval.tick().await;
 
             let state = app_handle_clone.state::<AppState>();
-            if !state.monitoring_enabled.load(Ordering::SeqCst) {
+            let interception_enabled = state.interception_enabled.load(Ordering::SeqCst);
+            if !interception_enabled {
+                sync_clipboard_tracking(&state);
+
+                if let Some(window_info) = window::get_active_window() {
+                    let _ = app_handle_clone.emit("active-window-changed", &window_info);
+                }
+
                 continue;
             }
 
@@ -581,7 +590,7 @@ async fn start_monitoring(
 
                 if should_process && !text.trim().is_empty() {
                     // First, check if this text contains tokens we can de-tokenize
-                    let should_detokenize = {
+                    let should_detokenize = interception_enabled && {
                         let vault = token_vault.lock();
                         contains_known_tokens(&text, &vault)
                     };
@@ -771,7 +780,7 @@ async fn start_monitoring(
                     );
                 }
 
-                if should_anonymize {
+                if should_anonymize && interception_enabled {
                     let state = app_handle_clone.state::<AppState>();
                     let mut pending = state.pending_tokenization.lock();
 
@@ -838,7 +847,7 @@ async fn set_monitoring_enabled(
 
 #[tauri::command]
 async fn get_monitoring_state(state: State<'_, AppState>) -> Result<bool, String> {
-    Ok(state.monitoring_enabled.load(Ordering::SeqCst))
+    Ok(state.interception_enabled.load(Ordering::SeqCst))
 }
 
 /// Mark current clipboard content as handled (user clicked tokenize or ignore)

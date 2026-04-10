@@ -20,7 +20,7 @@ let state = {
   config: null,
   sidecarReady: false,
   startupError: '',
-  monitoringEnabled: false,
+  interceptionEnabled: false,
   monitoringBusy: false,
 };
 
@@ -242,18 +242,11 @@ function updateDashboard() {
     return;
   }
 
-  if (!state.monitoringEnabled) {
-    elements.loadingSection.style.display = 'none';
-    elements.detectionSection.style.display = 'none';
-    elements.emptySection.style.display = 'block';
-    elements.emptyTitle.textContent = 'Monitoring Paused';
-    elements.emptyMessage.textContent = 'Clipboard protection is disabled. Enable monitoring to resume automatic detection and tokenization.';
-    return;
-  }
-
   elements.loadingSection.style.display = 'none';
   elements.emptyTitle.textContent = 'Clipboard Monitoring Active';
-  elements.emptyMessage.textContent = 'Copy text with PII to tokenize it before pasting to AI. Copy AI responses to automatically restore original values.';
+  elements.emptyMessage.textContent = state.interceptionEnabled
+    ? 'Copy text with PII to tokenize it before pasting to AI. Copy AI responses to automatically restore original values.'
+    : 'Engine is still running, but clipboard copy/paste interception is disabled until monitoring is enabled again.';
 
   if (state.entities.length > 0) {
     elements.detectionSection.style.display = 'block';
@@ -291,10 +284,10 @@ function updateDashboard() {
 
 function updateMonitoringUI() {
   const isReady = state.sidecarReady && !state.startupError;
-  const isEnabled = isReady && state.monitoringEnabled;
+  const isMonitoringEnabled = isReady && state.interceptionEnabled;
 
-  elements.statusDot?.classList.toggle('active', isEnabled);
-  elements.statusDot?.classList.toggle('paused', isReady && !state.monitoringEnabled);
+  elements.statusDot?.classList.toggle('active', isReady);
+  elements.statusDot?.classList.toggle('paused', isReady && !state.interceptionEnabled);
   elements.statusDot?.classList.toggle('error', !!state.startupError);
 
   if (state.startupError) {
@@ -302,15 +295,15 @@ function updateMonitoringUI() {
   } else if (!state.sidecarReady) {
     elements.statusLabel.textContent = 'Starting';
   } else {
-    elements.statusLabel.textContent = state.monitoringEnabled ? 'Monitoring' : 'Paused';
+    elements.statusLabel.textContent = isMonitoringEnabled ? 'Monitoring Enabled' : 'Monitoring Disabled';
   }
 
   if (elements.btnMonitorToggle) {
     elements.btnMonitorToggle.disabled = !state.sidecarReady || !!state.startupError || state.monitoringBusy;
-    elements.btnMonitorToggle.textContent = state.monitoringEnabled ? 'Disable' : 'Enable';
-    elements.btnMonitorToggle.classList.toggle('is-on', state.monitoringEnabled);
-    elements.btnMonitorToggle.classList.toggle('is-off', !state.monitoringEnabled);
-    elements.btnMonitorToggle.setAttribute('aria-pressed', String(state.monitoringEnabled));
+    elements.btnMonitorToggle.textContent = state.interceptionEnabled ? 'Disable' : 'Enable';
+    elements.btnMonitorToggle.classList.toggle('is-on', state.interceptionEnabled);
+    elements.btnMonitorToggle.classList.toggle('is-off', !state.interceptionEnabled);
+    elements.btnMonitorToggle.setAttribute('aria-pressed', String(state.interceptionEnabled));
   }
 }
 
@@ -319,24 +312,26 @@ async function handleToggleMonitoring() {
     return;
   }
 
-  const nextEnabled = !state.monitoringEnabled;
+  const nextEnabled = !state.interceptionEnabled;
   state.monitoringBusy = true;
   updateMonitoringUI();
 
   try {
     const enabled = await invoke('set_monitoring_enabled', { enabled: nextEnabled });
-    state.monitoringEnabled = !!enabled;
+    state.interceptionEnabled = !!enabled;
     if (!enabled) {
       state.originalText = '';
       state.tokenizedText = '';
       state.entities = [];
+    }
+    if (!enabled) {
       elements.activeWindow.textContent = '—';
     }
     showToast(
       enabled ? 'Monitoring Enabled' : 'Monitoring Disabled',
       enabled
-        ? 'Clipboard scanning and auto-tokenization are active again.'
-        : 'Clipboard scanning and auto-tokenization are paused.',
+        ? 'Automatic tokenization and restoration are active again.'
+        : 'The engine stays running, but clipboard copy/paste interception is disabled.',
       'info',
       2500,
     );
@@ -655,8 +650,13 @@ async function initTauriListeners() {
   });
 
   await listen('monitoring-state-changed', (event) => {
-    state.monitoringEnabled = !!event.payload?.enabled;
-    if (!state.monitoringEnabled) {
+    state.interceptionEnabled = !!event.payload?.enabled;
+    if (!state.interceptionEnabled) {
+      state.originalText = '';
+      state.tokenizedText = '';
+      state.entities = [];
+    }
+    if (!state.interceptionEnabled) {
       elements.activeWindow.textContent = '—';
     }
     updateMonitoringUI();
@@ -741,7 +741,7 @@ async function init() {
     console.log('Clipboard monitoring started');
     state.sidecarReady = true;
     state.startupError = '';
-    state.monitoringEnabled = !!enabled;
+    state.interceptionEnabled = !!enabled;
   } catch (error) {
     console.error('Failed to start monitoring:', error);
     state.startupError = `Failed to start clipboard monitoring: ${error}`;
