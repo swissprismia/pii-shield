@@ -755,6 +755,11 @@ fn configure_sidecar_command(command: &mut Command) {
     {
         command.creation_flags(CREATE_NO_WINDOW);
     }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = command;
+    }
 }
 
 fn development_sidecar_script() -> std::path::PathBuf {
