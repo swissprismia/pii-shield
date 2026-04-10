@@ -20,6 +20,8 @@ let state = {
   config: null,
   sidecarReady: false,
   startupError: '',
+  monitoringEnabled: false,
+  monitoringBusy: false,
 };
 
 // ── DOM Elements ─────────────────────────────────────────────────────────────
@@ -57,7 +59,9 @@ const elements = {
   // Header
   appVersion: document.getElementById('app-version'),
   activeWindow: document.getElementById('active-window'),
+  statusDot: document.getElementById('status-dot'),
   statusLabel: document.getElementById('status-label'),
+  btnMonitorToggle: document.getElementById('btn-monitor-toggle'),
   toastContainer: document.getElementById('toast-container'),
   // History
   historyList: document.getElementById('history-list'),
@@ -238,6 +242,15 @@ function updateDashboard() {
     return;
   }
 
+  if (!state.monitoringEnabled) {
+    elements.loadingSection.style.display = 'none';
+    elements.detectionSection.style.display = 'none';
+    elements.emptySection.style.display = 'block';
+    elements.emptyTitle.textContent = 'Monitoring Paused';
+    elements.emptyMessage.textContent = 'Clipboard protection is disabled. Enable monitoring to resume automatic detection and tokenization.';
+    return;
+  }
+
   elements.loadingSection.style.display = 'none';
   elements.emptyTitle.textContent = 'Clipboard Monitoring Active';
   elements.emptyMessage.textContent = 'Copy text with PII to tokenize it before pasting to AI. Copy AI responses to automatically restore original values.';
@@ -273,6 +286,67 @@ function updateDashboard() {
     elements.detectionSection.style.display = 'none';
     elements.emptySection.style.display = 'block';
     elements.tokenMapSection.style.display = 'none';
+  }
+}
+
+function updateMonitoringUI() {
+  const isReady = state.sidecarReady && !state.startupError;
+  const isEnabled = isReady && state.monitoringEnabled;
+
+  elements.statusDot?.classList.toggle('active', isEnabled);
+  elements.statusDot?.classList.toggle('paused', isReady && !state.monitoringEnabled);
+  elements.statusDot?.classList.toggle('error', !!state.startupError);
+
+  if (state.startupError) {
+    elements.statusLabel.textContent = 'Error';
+  } else if (!state.sidecarReady) {
+    elements.statusLabel.textContent = 'Starting';
+  } else {
+    elements.statusLabel.textContent = state.monitoringEnabled ? 'Monitoring' : 'Paused';
+  }
+
+  if (elements.btnMonitorToggle) {
+    elements.btnMonitorToggle.disabled = !state.sidecarReady || !!state.startupError || state.monitoringBusy;
+    elements.btnMonitorToggle.textContent = state.monitoringEnabled ? 'Disable' : 'Enable';
+    elements.btnMonitorToggle.classList.toggle('is-on', state.monitoringEnabled);
+    elements.btnMonitorToggle.classList.toggle('is-off', !state.monitoringEnabled);
+    elements.btnMonitorToggle.setAttribute('aria-pressed', String(state.monitoringEnabled));
+  }
+}
+
+async function handleToggleMonitoring() {
+  if (state.monitoringBusy || !state.sidecarReady || state.startupError) {
+    return;
+  }
+
+  const nextEnabled = !state.monitoringEnabled;
+  state.monitoringBusy = true;
+  updateMonitoringUI();
+
+  try {
+    const enabled = await invoke('set_monitoring_enabled', { enabled: nextEnabled });
+    state.monitoringEnabled = !!enabled;
+    if (!enabled) {
+      state.originalText = '';
+      state.tokenizedText = '';
+      state.entities = [];
+      elements.activeWindow.textContent = '—';
+    }
+    showToast(
+      enabled ? 'Monitoring Enabled' : 'Monitoring Disabled',
+      enabled
+        ? 'Clipboard scanning and auto-tokenization are active again.'
+        : 'Clipboard scanning and auto-tokenization are paused.',
+      'info',
+      2500,
+    );
+  } catch (error) {
+    console.error('Failed to toggle monitoring:', error);
+    showToast('Error', `Failed to update monitoring: ${error}`, 'error');
+  } finally {
+    state.monitoringBusy = false;
+    updateMonitoringUI();
+    updateDashboard();
   }
 }
 
@@ -580,6 +654,15 @@ async function initTauriListeners() {
     elements.activeWindow.textContent = app_name || title || '—';
   });
 
+  await listen('monitoring-state-changed', (event) => {
+    state.monitoringEnabled = !!event.payload?.enabled;
+    if (!state.monitoringEnabled) {
+      elements.activeWindow.textContent = '—';
+    }
+    updateMonitoringUI();
+    updateDashboard();
+  });
+
   await listen('clipboard-scanned', () => {
     state.stats.scanned++;
     updateDashboard();
@@ -631,6 +714,7 @@ async function init() {
   elements.btnIgnore?.addEventListener('click', handleIgnore);
   elements.btnClearHistory?.addEventListener('click', handleClearHistory);
   elements.vaultClearAll?.addEventListener('click', handleClearVault);
+  elements.btnMonitorToggle?.addEventListener('click', handleToggleMonitoring);
   elements.btnViewVault?.addEventListener('click', () => {
     document.querySelector('[data-tab="vault"]').click();
   });
@@ -653,18 +737,18 @@ async function init() {
 
   // Start clipboard monitoring
   try {
-    await invoke('start_monitoring');
+    const enabled = await invoke('start_monitoring');
     console.log('Clipboard monitoring started');
     state.sidecarReady = true;
     state.startupError = '';
-    elements.statusLabel.textContent = 'Monitoring';
+    state.monitoringEnabled = !!enabled;
   } catch (error) {
     console.error('Failed to start monitoring:', error);
     state.startupError = `Failed to start clipboard monitoring: ${error}`;
     showToast('Error', state.startupError, 'error');
-    elements.statusLabel.textContent = 'Error';
   }
 
+  updateMonitoringUI();
   updateDashboard();
 }
 

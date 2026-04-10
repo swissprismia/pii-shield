@@ -71,6 +71,7 @@ fn set_tray_icon(app: &AppHandle, r: u8, g: u8, b: u8) {
 const TRAY_IDLE: (u8, u8, u8) = (34, 197, 94); // green  #22c55e
 const TRAY_WARNING: (u8, u8, u8) = (245, 158, 11); // orange #f59e0b
 const TRAY_DANGER: (u8, u8, u8) = (239, 68, 68); // red    #ef4444
+const TRAY_PAUSED: (u8, u8, u8) = (107, 114, 128); // gray   #6b7280
 
 /// Returns true if the entity type is a secret/credential (vs personal PII).
 fn is_secret_entity(entity_type: &str) -> bool {
@@ -205,6 +206,8 @@ pub struct AppState {
     sidecar: Arc<tokio::sync::Mutex<PresidioSidecar>>,
     last_clipboard_hash: Mutex<u64>,
     clipboard_handled: Mutex<bool>,
+    monitoring_started: AtomicBool,
+    monitoring_enabled: AtomicBool,
     /// App configuration (language, score threshold, monitored apps)
     config: Mutex<config::Config>,
     /// Token vault for storing PII token mappings for de-tokenization
@@ -227,6 +230,8 @@ impl AppState {
             sidecar: Arc::new(tokio::sync::Mutex::new(PresidioSidecar::new())),
             last_clipboard_hash: Mutex::new(0),
             clipboard_handled: Mutex::new(false),
+            monitoring_started: AtomicBool::new(false),
+            monitoring_enabled: AtomicBool::new(false),
             config: Mutex::new(config),
             token_vault: Arc::new(Mutex::new(TokenVault::new())),
             pending_tokenization: Arc::new(Mutex::new(None)),
@@ -248,9 +253,13 @@ fn try_tokenize_for_browser(
     app_handle: &AppHandle,
     trigger: &str,
 ) {
+    let state = app_handle.state::<AppState>();
+    if !state.monitoring_enabled.load(Ordering::SeqCst) {
+        return;
+    }
+
     // Check if we're in a browser or AI assistant app
     if let Some(window_info) = window::get_active_window() {
-        let state = app_handle.state::<AppState>();
         let keywords = state.config.lock().get_all_keywords();
         let should_anonymize = should_auto_anonymize(&window_info, &keywords);
 
@@ -360,6 +369,14 @@ fn start_input_listener(
         log::info!("Starting global input listener for paste interception...");
 
         let callback = move |event: Event| {
+            if !app_handle
+                .state::<AppState>()
+                .monitoring_enabled
+                .load(Ordering::SeqCst)
+            {
+                return;
+            }
+
             match event.event_type {
                 // Track Ctrl key state
                 EventType::KeyPress(Key::ControlLeft) | EventType::KeyPress(Key::ControlRight) => {
@@ -431,18 +448,95 @@ fn start_input_listener(
     });
 }
 
-/// Start clipboard monitoring
-#[tauri::command]
-async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    log::info!("Starting clipboard monitoring with tokenization support...");
+fn sync_clipboard_tracking(state: &AppState) {
+    let hash = clipboard::get_clipboard_text()
+        .map(|text| clipboard::hash_text(&text))
+        .unwrap_or(0);
+    *state.last_clipboard_hash.lock() = hash;
+    *state.clipboard_handled.lock() = true;
+}
 
-    // Start the sidecar process
+fn set_monitoring_visual_state(app_handle: &AppHandle, enabled: bool) {
+    let (r, g, b, tooltip) = if enabled {
+        (
+            TRAY_IDLE.0,
+            TRAY_IDLE.1,
+            TRAY_IDLE.2,
+            "PII Shield — monitoring",
+        )
+    } else {
+        (
+            TRAY_PAUSED.0,
+            TRAY_PAUSED.1,
+            TRAY_PAUSED.2,
+            "PII Shield — monitoring paused",
+        )
+    };
+
+    set_tray_icon(app_handle, r, g, b);
+    if let Some(tray) = app_handle.tray_by_id("pii-tray") {
+        let _ = tray.set_tooltip(Some(tooltip));
+    }
+}
+
+fn emit_monitoring_state(app_handle: &AppHandle, enabled: bool) {
+    let _ = app_handle.emit(
+        "monitoring-state-changed",
+        serde_json::json!({
+            "enabled": enabled,
+        }),
+    );
+}
+
+async fn enable_monitoring(app_handle: &AppHandle, state: &AppState) -> Result<bool, String> {
     {
         let mut sidecar = state.sidecar.lock().await;
-        sidecar
-            .start(&app_handle)
-            .await
-            .map_err(|e| e.to_string())?;
+        sidecar.start(app_handle).await.map_err(|e| e.to_string())?;
+    }
+
+    sync_clipboard_tracking(state);
+    state.monitoring_enabled.store(true, Ordering::SeqCst);
+    set_monitoring_visual_state(app_handle, true);
+    emit_monitoring_state(app_handle, true);
+    Ok(true)
+}
+
+async fn disable_monitoring(app_handle: &AppHandle, state: &AppState) -> Result<bool, String> {
+    state.monitoring_enabled.store(false, Ordering::SeqCst);
+    sync_clipboard_tracking(state);
+    {
+        let mut pending = state.pending_tokenization.lock();
+        *pending = None;
+    }
+    {
+        let mut sidecar = state.sidecar.lock().await;
+        sidecar.stop();
+    }
+    set_monitoring_visual_state(app_handle, false);
+    emit_monitoring_state(app_handle, false);
+    Ok(false)
+}
+
+/// Start clipboard monitoring
+#[tauri::command]
+async fn start_monitoring(
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    log::info!("Starting clipboard monitoring with tokenization support...");
+
+    let first_start = state
+        .monitoring_started
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok();
+
+    if !first_start {
+        return enable_monitoring(&app_handle, &state).await;
+    }
+
+    if let Err(error) = enable_monitoring(&app_handle, &state).await {
+        state.monitoring_started.store(false, Ordering::SeqCst);
+        return Err(error);
     }
 
     // Start the global input listener for paste interception (Ctrl+V, right-click, etc.)
@@ -462,13 +556,17 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
         loop {
             interval.tick().await;
 
+            let state = app_handle_clone.state::<AppState>();
+            if !state.monitoring_enabled.load(Ordering::SeqCst) {
+                continue;
+            }
+
             // Get current clipboard content
             if let Some(text) = clipboard::get_clipboard_text() {
                 let hash = clipboard::hash_text(&text);
 
                 // Check if we should process this clipboard content
                 let should_process = {
-                    let state = app_handle_clone.state::<AppState>();
                     let mut last_hash = state.last_clipboard_hash.lock();
                     let mut handled = state.clipboard_handled.lock();
 
@@ -722,7 +820,25 @@ async fn start_monitoring(app_handle: AppHandle, state: State<'_, AppState>) -> 
         }
     });
 
-    Ok(())
+    Ok(true)
+}
+
+#[tauri::command]
+async fn set_monitoring_enabled(
+    enabled: bool,
+    app_handle: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    if enabled {
+        start_monitoring(app_handle, state).await
+    } else {
+        disable_monitoring(&app_handle, &state).await
+    }
+}
+
+#[tauri::command]
+async fn get_monitoring_state(state: State<'_, AppState>) -> Result<bool, String> {
+    Ok(state.monitoring_enabled.load(Ordering::SeqCst))
 }
 
 /// Mark current clipboard content as handled (user clicked tokenize or ignore)
@@ -893,6 +1009,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             start_monitoring,
+            set_monitoring_enabled,
+            get_monitoring_state,
             mark_clipboard_handled,
             get_sidecar_status,
             get_token_vault,
