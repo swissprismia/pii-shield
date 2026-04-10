@@ -107,6 +107,9 @@ use tokio::sync::Mutex;
 const SIDECAR_READY_TIMEOUT_SECS: u64 = 120;
 const SIDECAR_RESPONSE_TIMEOUT_SECS: u64 = 20;
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Manages the Presidio Python sidecar process
 pub struct PresidioSidecar {
     child: Option<Child>,
@@ -181,14 +184,16 @@ impl PresidioSidecar {
             attempted.push(python_label.clone());
             log::info!("Trying Python runtime: {}", python_label);
 
-            match Command::new(&python_cmd)
+            let mut command = Command::new(&python_cmd);
+            command
                 .arg(script_path)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
-                .kill_on_drop(true)
-                .spawn()
-            {
+                .kill_on_drop(true);
+            configure_sidecar_command(&mut command);
+
+            match command.spawn() {
                 Ok(child) => match self.initialize_child(child).await {
                     Ok(child) => {
                         self.child = Some(child);
@@ -224,11 +229,15 @@ impl PresidioSidecar {
     ) -> Result<(), SidecarError> {
         log::info!("Starting binary sidecar from: {:?}", binary_path);
 
-        let child = Command::new(binary_path)
+        let mut command = Command::new(binary_path);
+        command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        configure_sidecar_command(&mut command);
+
+        let child = command
             .spawn()
             .map_err(|e| SidecarError::StartError(e.to_string()))?;
 
@@ -259,6 +268,7 @@ impl PresidioSidecar {
             .stdout
             .take()
             .ok_or_else(|| SidecarError::StartError("Failed to get stdout".to_string()))?;
+        let stderr = child.stderr.take();
 
         // Create channels for communication
         let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(100);
@@ -292,6 +302,15 @@ impl PresidioSidecar {
                 }
             }
         });
+
+        if let Some(stderr) = stderr {
+            let mut stderr_reader = BufReader::new(stderr).lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = stderr_reader.next_line().await {
+                    log::warn!("Sidecar stderr: {}", line);
+                }
+            });
+        }
 
         self.stdin_tx = Some(stdin_tx);
         self.response_rx = Some(Arc::new(Mutex::new(response_rx)));
@@ -328,27 +347,62 @@ impl PresidioSidecar {
     async fn wait_for_ready(&mut self) -> Result<(), SidecarError> {
         if let Some(ref rx) = self.response_rx {
             let mut rx_guard = rx.lock().await;
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(SIDECAR_READY_TIMEOUT_SECS),
-                rx_guard.recv(),
-            )
-            .await
-            {
-                Ok(Some(line)) => {
-                    if line.contains("ready") {
-                        log::info!("Sidecar is ready: {}", line);
-                        Ok(())
-                    } else {
-                        log::warn!("Unexpected ready message: {}", line);
-                        Ok(())
+            let deadline = tokio::time::Instant::now()
+                + std::time::Duration::from_secs(SIDECAR_READY_TIMEOUT_SECS);
+            let mut recent_output = Vec::new();
+
+            loop {
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
+                    return Err(SidecarError::StartError(format!(
+                        "Timeout waiting for sidecar ready{}",
+                        format_recent_output(&recent_output)
+                    )));
+                }
+
+                match tokio::time::timeout(deadline - now, rx_guard.recv()).await {
+                    Ok(Some(line)) => {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+
+                        match serde_json::from_str::<serde_json::Value>(trimmed) {
+                            Ok(value) if is_ready_payload(&value) => {
+                                log::info!("Sidecar is ready: {}", trimmed);
+                                return Ok(());
+                            }
+                            Ok(value) => {
+                                remember_output(
+                                    &mut recent_output,
+                                    serde_json::to_string(&value)
+                                        .unwrap_or_else(|_| trimmed.to_string()),
+                                );
+                                log::warn!("Ignoring unexpected startup message: {}", trimmed);
+                            }
+                            Err(err) => {
+                                remember_output(&mut recent_output, trimmed.to_string());
+                                log::warn!(
+                                    "Ignoring non-JSON startup output from sidecar: {} ({})",
+                                    trimmed,
+                                    err
+                                );
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        return Err(SidecarError::StartError(format!(
+                            "Sidecar closed unexpectedly before signaling ready{}",
+                            format_recent_output(&recent_output)
+                        )));
+                    }
+                    Err(_) => {
+                        return Err(SidecarError::StartError(format!(
+                            "Timeout waiting for sidecar ready{}",
+                            format_recent_output(&recent_output)
+                        )));
                     }
                 }
-                Ok(None) => Err(SidecarError::StartError(
-                    "Sidecar closed unexpectedly".to_string(),
-                )),
-                Err(_) => Err(SidecarError::StartError(
-                    "Timeout waiting for sidecar ready".to_string(),
-                )),
             }
         } else {
             Ok(())
@@ -375,35 +429,71 @@ impl PresidioSidecar {
         // Wait for response with timeout
         if let Some(ref rx) = self.response_rx {
             let mut rx_guard = rx.lock().await;
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(SIDECAR_RESPONSE_TIMEOUT_SECS),
-                rx_guard.recv(),
-            )
-            .await
-            {
-                Ok(Some(line)) => {
-                    log::debug!("Received response from sidecar: {}", line);
-                    let response: SidecarResponse = serde_json::from_str(&line).map_err(|e| {
-                        SidecarError::ParseError(format!("Failed to parse response: {}", e))
-                    })?;
+            let deadline = tokio::time::Instant::now()
+                + std::time::Duration::from_secs(SIDECAR_RESPONSE_TIMEOUT_SECS);
+            let mut recent_output = Vec::new();
 
-                    if !response.success {
-                        if let Some(error) = response.error {
-                            return Err(SidecarError::AnalysisError(error));
+            loop {
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
+                    log::error!(
+                        "Timeout waiting for sidecar response{}",
+                        format_recent_output(&recent_output)
+                    );
+                    return Err(SidecarError::CommunicationError(format!(
+                        "Timeout waiting for sidecar response{}",
+                        format_recent_output(&recent_output)
+                    )));
+                }
+
+                match tokio::time::timeout(deadline - now, rx_guard.recv()).await {
+                    Ok(Some(line)) => {
+                        let trimmed = line.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+
+                        log::debug!("Received response candidate from sidecar: {}", trimmed);
+                        match serde_json::from_str::<SidecarResponse>(trimmed) {
+                            Ok(response) => {
+                                if !response.success {
+                                    if let Some(error) = response.error.clone() {
+                                        return Err(SidecarError::AnalysisError(error));
+                                    }
+                                }
+
+                                return Ok(response);
+                            }
+                            Err(err) => {
+                                remember_output(&mut recent_output, trimmed.to_string());
+                                log::warn!(
+                                    "Ignoring non-protocol sidecar output while awaiting response: {} ({})",
+                                    trimmed,
+                                    err
+                                );
+                            }
                         }
                     }
-
-                    return Ok(response);
-                }
-                Ok(None) => {
-                    log::error!("Sidecar closed unexpectedly");
-                    return Err(SidecarError::CommunicationError(
-                        "Sidecar closed".to_string(),
-                    ));
-                }
-                Err(_) => {
-                    log::error!("Timeout waiting for sidecar response");
-                    return Err(SidecarError::CommunicationError("Timeout".to_string()));
+                    Ok(None) => {
+                        log::error!(
+                            "Sidecar closed unexpectedly{}",
+                            format_recent_output(&recent_output)
+                        );
+                        return Err(SidecarError::CommunicationError(format!(
+                            "Sidecar closed{}",
+                            format_recent_output(&recent_output)
+                        )));
+                    }
+                    Err(_) => {
+                        log::error!(
+                            "Timeout waiting for sidecar response{}",
+                            format_recent_output(&recent_output)
+                        );
+                        return Err(SidecarError::CommunicationError(format!(
+                            "Timeout waiting for sidecar response{}",
+                            format_recent_output(&recent_output)
+                        )));
+                    }
                 }
             }
         }
@@ -635,6 +725,38 @@ fn python_command_candidates(script_path: &std::path::Path) -> Vec<std::path::Pa
     candidates
 }
 
+fn remember_output(lines: &mut Vec<String>, line: String) {
+    const MAX_LINES: usize = 5;
+
+    if lines.len() == MAX_LINES {
+        lines.remove(0);
+    }
+    lines.push(line);
+}
+
+fn format_recent_output(lines: &[String]) -> String {
+    if lines.is_empty() {
+        String::new()
+    } else {
+        format!("; recent sidecar output: {}", lines.join(" | "))
+    }
+}
+
+fn is_ready_payload(value: &serde_json::Value) -> bool {
+    value
+        .get("status")
+        .and_then(|status| status.as_str())
+        .map(|status| status.eq_ignore_ascii_case("ready"))
+        .unwrap_or(false)
+}
+
+fn configure_sidecar_command(command: &mut Command) {
+    #[cfg(target_os = "windows")]
+    {
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+}
+
 fn development_sidecar_script() -> std::path::PathBuf {
     std::env::current_dir()
         .unwrap_or_default()
@@ -778,5 +900,28 @@ mod tests {
 
         #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
         assert!(names.contains(&"presidio-sidecar-x86_64-unknown-linux-gnu"));
+    }
+
+    #[test]
+    fn test_is_ready_payload_detects_ready_status() {
+        let ready = serde_json::json!({ "status": "ready", "presidio": true });
+        let not_ready = serde_json::json!({ "success": true });
+
+        assert!(is_ready_payload(&ready));
+        assert!(!is_ready_payload(&not_ready));
+    }
+
+    #[test]
+    fn test_remember_output_keeps_recent_lines() {
+        let mut lines = Vec::new();
+
+        for idx in 0..7 {
+            remember_output(&mut lines, format!("line-{idx}"));
+        }
+
+        assert_eq!(
+            lines,
+            vec!["line-2", "line-3", "line-4", "line-5", "line-6"]
+        );
     }
 }

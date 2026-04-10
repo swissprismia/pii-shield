@@ -22,11 +22,13 @@ De-tokenization Protocol:
 """
 
 import json
+import multiprocessing
 import sys
 import signal
 import re
 from typing import Dict, List, Tuple
 from collections import defaultdict
+from pathlib import Path
 
 try:
     import tldextract
@@ -173,9 +175,23 @@ def setup_presidio():
     try:
         from presidio_analyzer import AnalyzerEngine
         from presidio_anonymizer import AnonymizerEngine
+        from presidio_analyzer.nlp_engine import NlpEngineProvider
+        import spacy
 
-        # Initialize the analyzer with default NLP engine (spaCy)
-        analyzer = AnalyzerEngine()
+        model_config = build_spacy_model_configuration(spacy)
+        if not model_config["models"]:
+            raise RuntimeError("No bundled or installed spaCy models available")
+
+        provider = NlpEngineProvider(nlp_configuration={
+            "nlp_engine_name": "spacy",
+            "models": model_config["models"],
+        })
+        nlp_engine = provider.create_engine()
+
+        analyzer = AnalyzerEngine(
+            nlp_engine=nlp_engine,
+            supported_languages=model_config["supported_languages"],
+        )
 
         # Add custom Swiss AVS recognizer
         avs_recognizer = SwissAvsRecognizer.create_recognizer()
@@ -195,6 +211,64 @@ def setup_presidio():
     except ImportError as e:
         log_error(f"Failed to import Presidio: {e}")
         return None, None
+    except Exception as e:
+        log_error(f"Failed to initialize Presidio: {e}")
+        return None, None
+
+
+def sidecar_resource_root() -> Path:
+    """Return the directory containing bundled sidecar resources."""
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+
+
+def resolve_spacy_model_reference(spacy_module, candidates: List[str]):
+    """
+    Resolve a spaCy model to either a bundled on-disk path or an installed package.
+
+    Returns a tuple of (reference, canonical_name), or (None, None) if unavailable.
+    """
+    resource_root = sidecar_resource_root()
+
+    for model_name in candidates:
+        bundled_path = resource_root / model_name
+        if bundled_path.exists():
+            log_info(f"Using bundled spaCy model: {model_name} ({bundled_path})")
+            return str(bundled_path), model_name
+
+        if spacy_module.util.is_package(model_name):
+            log_info(f"Using installed spaCy model package: {model_name}")
+            return model_name, model_name
+
+    return None, None
+
+
+def build_spacy_model_configuration(spacy_module) -> dict:
+    """Build explicit Presidio NLP configuration without runtime model downloads."""
+    models = []
+    supported_languages = []
+
+    english_reference, english_name = resolve_spacy_model_reference(
+        spacy_module,
+        ["en_core_web_lg", "en_core_web_md", "en_core_web_sm"],
+    )
+    if english_reference:
+        models.append({"lang_code": "en", "model_name": english_reference})
+        supported_languages.append("en")
+        log_info(f"English NLP model resolved to {english_name}")
+
+    french_reference, french_name = resolve_spacy_model_reference(
+        spacy_module,
+        ["fr_core_news_lg", "fr_core_news_md", "fr_core_news_sm"],
+    )
+    if french_reference:
+        models.append({"lang_code": "fr", "model_name": french_reference})
+        supported_languages.append("fr")
+        log_info(f"French NLP model resolved to {french_name}")
+
+    return {
+        "models": models,
+        "supported_languages": supported_languages,
+    }
 
 
 def configure_tldextract_for_offline_use():
@@ -732,4 +806,5 @@ def main():
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     main()
