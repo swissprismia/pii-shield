@@ -646,7 +646,7 @@ impl PresidioSidecar {
         }
 
         // Sort by position (reverse) so we can replace from end to start
-        matches.sort_by(|a, b| b.0.cmp(&a.0));
+        matches.sort_by_key(|b| std::cmp::Reverse(b.0));
 
         // Build entities and anonymized text
         for (start, end, entity_type, replacement, matched_text) in matches {
